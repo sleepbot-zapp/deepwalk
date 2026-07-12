@@ -54,16 +54,8 @@ const DOOR_INTERACT_DIST = 2.6;
 const DOOR_LOOK_DIST = 3.2;
 const DOOR_AUTO_CLOSE_DELAY = 6.5;
 const DOOR_LEAVE_DIST = 3.6;
-// How close the player must walk to an OPEN door to count as having gone
-// through it. Distance-based on purpose: the door's facing is picked from a
-// random cardinal direction with no relation to which way the corridor
-// actually approaches from, so a "which side did you approach from" check
-// can never reliably fire. Proximity works regardless of orientation.
 const DOOR_ENTER_RADIUS = 1.1;
 
-// When we spawn the player behind a sealed entrance door, this maps the wall
-// the door is built into to the yaw that makes the player face away from it
-// (so the door reads as "behind you" the moment you spawn).
 const ENTRANCE_YAW_FOR_WALL = { n: Math.PI, s: 0, w: -Math.PI / 2, e: Math.PI / 2 };
 
 const GAME_KEYS = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -203,61 +195,62 @@ function makeStainCanvas(type, rng = Math.random) {
   return c;
 }
 
-
-
-function makeDoorPanelCanvas(rng = Math.random) {
+function makeObsidianCanvas() {
   const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 384;
+  c.width = c.height = 256;
   const ctx = c.getContext('2d');
-  const w = c.width,
-    h = c.height;
-
-  const base = ctx.createLinearGradient(0, 0, 0, h);
-  base.addColorStop(0, '#5b3a22');
-  base.addColorStop(1, '#38220f');
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, w, h);
-
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-  ctx.lineWidth = 2;
-  for (let x = 32; x < w; x += 48) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
+  ctx.fillStyle = '#100c14';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 1400; i++) {
+    const g = 15 + Math.random() * 45;
+    ctx.fillStyle = `rgba(${g + 30},${g + 12},${g + 38},${(0.05 + Math.random() * 0.14).toFixed(2)})`;
+    const s = 1 + Math.random() * 3;
+    ctx.fillRect(Math.random() * 256, Math.random() * 256, s, s);
   }
-
-  for (let i = 0; i < 500; i++) {
-    const g = 40 + rng() * 40;
-    ctx.strokeStyle = `rgba(${g + 30},${g + 15},${g},${(0.05 + rng() * 0.12).toFixed(2)})`;
-    const x = rng() * w,
-      y = rng() * h;
-    const len = 10 + rng() * 34;
+  for (let i = 0; i < 40; i++) {
+    ctx.strokeStyle = `rgba(255,150,80,${(0.03 + Math.random() * 0.06).toFixed(2)})`;
+    ctx.lineWidth = 1;
+    const x = Math.random() * 256,
+      y = Math.random() * 256;
+    const len = 6 + Math.random() * 18;
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.lineTo(x + (rng() - 0.5) * 6, y + len);
+    ctx.lineTo(x + (Math.random() - 0.5) * 10, y + len);
+    ctx.stroke();
+  }
+  return c;
+}
+
+function makePortalCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, 256, 256);
+  const cx = 128,
+    cy = 128;
+
+  for (let ring = 0; ring < 46; ring++) {
+    const t = ring / 46;
+    const radius = 8 + t * 150;
+    const wobble = Math.sin(t * 13 + rng() * 4) * 9;
+    const hue = 16 + t * 26;
+    const alpha = 0.4 * (1 - t) + 0.05;
+    ctx.strokeStyle = `hsla(${hue}, 92%, ${58 - t * 22}%, ${alpha.toFixed(2)})`;
+    ctx.lineWidth = 2 + (1 - t) * 3;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, radius + wobble, radius * 0.92 + wobble, rng() * Math.PI, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  ctx.fillStyle = 'rgba(18,16,14,0.9)';
-  ctx.fillRect(0, h * 0.16, w, 10);
-  ctx.fillRect(0, h * 0.82, w, 10);
-
-  ctx.fillStyle = 'rgba(95,90,80,0.9)';
-  for (const y of [h * 0.16 + 5, h * 0.82 + 5]) {
-    for (let x = 16; x < w; x += 30) {
-      ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  ctx.strokeStyle = 'rgba(75,70,60,0.9)';
-  ctx.lineWidth = 5;
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 110);
+  grad.addColorStop(0, 'rgba(255,224,160,0.95)');
+  grad.addColorStop(0.35, 'rgba(255,150,60,0.55)');
+  grad.addColorStop(1, 'rgba(255,80,20,0)');
+  ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.arc(w * 0.8, h * 0.52, 16, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.arc(cx, cy, 118, 0, Math.PI * 2);
+  ctx.fill();
 
   return c;
 }
@@ -287,11 +280,6 @@ function makeRampGeometry(size, ownY, neighborY, dir) {
   return geo;
 }
 
-/**
- * MazeGame owns the Three.js renderer, scene, maze meshes, input and the
- * render loop. It is intentionally framework-agnostic: the React component
- * just mounts it into a DOM node and forwards callbacks/state.
- */
 export class MazeGame {
   constructor(container, callbacks = {}) {
     this.container = container;
@@ -388,19 +376,12 @@ export class MazeGame {
     this.torchPitch = this.pitch;
     this._torchEuler = new THREE.Euler();
     this._torchForward = new THREE.Vector3();
-
-    // Omnidirectional glow that travels with the torch, so the area
-    // immediately around the player (sides, floor, ceiling) picks up light
-    // instead of only whatever sits inside the narrow aimed beam.
     this.torchGlow = new THREE.PointLight(0xffb37a, 14, TORCH_GLOW_RADIUS, 2);
     this.scene.add(this.torchGlow);
-
     this.fillLight = new THREE.PointLight(0xffb37a, 4, 2, 2);
     this.camera.add(this.fillLight);
     this.fillLight.position.set(0, -0.1, 0.3);
-
     this.scene.add(this.camera);
-
     this._onResize = () => {
       const clientWidth = this.container.clientWidth || window.innerWidth || 1;
       const clientHeight = this.container.clientHeight || window.innerHeight || 1;
@@ -680,10 +661,13 @@ export class MazeGame {
     const wallTop = maxElev * STEP_HEIGHT + WALL_H;
     const wallSpan = wallTop - wallBottom;
     const wallCenterY = (wallBottom + wallTop) / 2;
-
+    this._wallSpan = wallSpan;
+    this._wallCenterY = wallCenterY;
+    this._wallBottom = wallBottom;
+    this._wallTop = wallTop;
+    this._wallMat = wallMat;
     const wallGeo = new THREE.BoxGeometry(CELL, wallSpan, 0.25);
     const wallGeoV = new THREE.BoxGeometry(0.25, wallSpan, CELL);
-
     const buildWallMesh = (crawlFlag, axis, cx, cz, floorY) => {
       if (!crawlFlag) {
         const geo = axis === 'z' ? wallGeo : wallGeoV;
@@ -820,16 +804,43 @@ export class MazeGame {
     return (ownElev + (neighborElev - ownElev) * t) * STEP_HEIGHT;
   }
 
+  _buildPortalBackPanel(holeW, holeH, panelBottom, panelTop) {
+    const w = CELL;
+    const shape = new THREE.Shape();
+    shape.moveTo(-w / 2, panelBottom);
+    shape.lineTo(w / 2, panelBottom);
+    shape.lineTo(w / 2, panelTop);
+    shape.lineTo(-w / 2, panelTop);
+    shape.lineTo(-w / 2, panelBottom);
+
+    const hole = new THREE.Path();
+    hole.moveTo(-holeW / 2, 0);
+    hole.lineTo(holeW / 2, 0);
+    hole.lineTo(holeW / 2, holeH);
+    hole.lineTo(-holeW / 2, holeH);
+    hole.lineTo(-holeW / 2, 0);
+    shape.holes.push(hole);
+
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.22, bevelEnabled: false, curveSegments: 1 });
+    geo.translate(0, 0, -0.11);
+    const mesh = new THREE.Mesh(geo, this._floorMaterials.stone);
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
   _buildDoors(exits) {
     this.doors = [];
     const rng = this.rng || Math.random;
     const cardinalYaws = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
     const frameMat = new THREE.MeshStandardMaterial({
-      map: new THREE.CanvasTexture(this.stoneCanvas),
-      roughness: 0.9,
-      metalness: 0.02,
-      color: 0xb9bac0,
+      map: new THREE.CanvasTexture(makeObsidianCanvas()),
+      roughness: 0.7,
+      metalness: 0.15,
+      color: 0x55505f,
     });
+
+    const frameW = DOOR_WIDTH + 0.6;
+    const frameH = DOOR_HEIGHT + 0.3;
 
     for (const exit of exits) {
       const { x, z } = this._cellCenter(exit.x, exit.y);
@@ -841,54 +852,62 @@ export class MazeGame {
       group.rotation.y = yaw;
       group.userData.exitLetter = exit.letter;
 
-      const jambGeo = new THREE.BoxGeometry(0.18, DOOR_HEIGHT + 0.3, 0.32);
+      const globalBottom = this._wallBottom ?? -0.2;
+      const globalTop = this._wallTop ?? WALL_H;
+      const backPanel = this._buildPortalBackPanel(
+        frameW,
+        frameH,
+        globalBottom - exitFloorY,
+        globalTop - exitFloorY,
+      );
+      group.add(backPanel);
+
+      const jambGeo = new THREE.BoxGeometry(0.22, frameH, 0.34);
       const leftJamb = new THREE.Mesh(jambGeo, frameMat);
-      leftJamb.position.set(-DOOR_WIDTH / 2 - 0.09, (DOOR_HEIGHT + 0.3) / 2, 0);
+      leftJamb.position.set(-DOOR_WIDTH / 2 - 0.11, frameH / 2, 0);
       leftJamb.castShadow = true;
       leftJamb.receiveShadow = true;
       const rightJamb = leftJamb.clone();
-      rightJamb.position.x = DOOR_WIDTH / 2 + 0.09;
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(DOOR_WIDTH + 0.54, 0.24, 0.32), frameMat);
-      lintel.position.set(0, DOOR_HEIGHT + 0.15, 0);
+      rightJamb.position.x = DOOR_WIDTH / 2 + 0.11;
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(frameW, 0.26, 0.36), frameMat);
+      lintel.position.set(0, frameH, 0);
       lintel.castShadow = true;
       lintel.receiveShadow = true;
-      group.add(leftJamb, rightJamb, lintel);
-
-      const pivot = new THREE.Group();
-      pivot.position.set(-DOOR_WIDTH / 2, 0, 0);
-      const panelTex = new THREE.CanvasTexture(makeDoorPanelCanvas(rng));
-      panelTex.colorSpace = THREE.SRGBColorSpace;
-      const panelMat = new THREE.MeshStandardMaterial({
-        map: panelTex,
-        roughness: 0.85,
-        metalness: 0.05,
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(frameW, 0.14, 0.36), frameMat);
+      sill.position.set(0, 0.07, 0);
+      sill.receiveShadow = true;
+      group.add(leftJamb, rightJamb, lintel, sill);
+      const portalTex = new THREE.CanvasTexture(makePortalCanvas(rng));
+      portalTex.colorSpace = THREE.SRGBColorSpace;
+      portalTex.wrapS = portalTex.wrapT = THREE.RepeatWrapping;
+      const portalMat = new THREE.MeshBasicMaterial({
+        map: portalTex,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
       });
-      const panel = new THREE.Mesh(
-        new THREE.BoxGeometry(DOOR_WIDTH, DOOR_HEIGHT, DOOR_THICKNESS),
-        panelMat,
+      const portal = new THREE.Mesh(
+        new THREE.PlaneGeometry(DOOR_WIDTH * 0.94, DOOR_HEIGHT * 0.94),
+        portalMat,
       );
-      panel.position.set(DOOR_WIDTH / 2, DOOR_HEIGHT / 2, 0);
-      panel.castShadow = true;
-      panel.receiveShadow = true;
-      pivot.add(panel);
-      group.add(pivot);
-
-      const light = new THREE.PointLight(0xf7dca0, 16, 6, 2);
-      light.position.set(0, DOOR_HEIGHT * 0.6, 0.7);
+      portal.position.set(0, DOOR_HEIGHT / 2, 0.02);
+      group.add(portal);
+      const light = new THREE.PointLight(0xff9a4d, 0, 6, 2);
+      light.position.set(0, DOOR_HEIGHT * 0.55, 0.6);
       group.add(light);
-
       this.scene.add(group);
-
       exit.worldX = x;
       exit.worldZ = z;
       exit.doorYaw = yaw;
       exit.doorGroup = group;
-      exit.doorPivot = pivot;
-      exit.doorPanel = panel;
+      exit.portalMesh = portal;
+      exit.portalMat = portalMat;
+      exit.portalLight = light;
       exit.doorState = 'closed';
       exit.doorAnimT = 0;
       exit.doorOpenAt = 0;
-
       this.doors.push(group);
     }
   }
@@ -897,9 +916,6 @@ export class MazeGame {
     return EXIT_LETTERS.indexOf((letter || '').toUpperCase());
   }
 
-  // Finds a wall that actually exists on the spawn cell so the entrance door
-  // can be built flush into real geometry instead of floating in open space.
-  // Preferring 'n' keeps it consistent with the default spawn-facing yaw.
   _pickEntranceWallDir(cellX, cellY) {
     const cell = this.maze[cellY] && this.maze[cellY][cellX];
     if (!cell) return null;
@@ -909,17 +925,11 @@ export class MazeGame {
     if (cell.w) return 'w';
     return null;
   }
-
-  // Builds a closed, permanently-sealed door set into the wall behind the
-  // player's spawn point. It is deliberately kept out of `this.exits`, so the
-  // look/interact raycasts (which only ever scan `this.exits`) can never
-  // target it — it cannot be opened, only seen.
+  
   _buildEntranceDoor(cellX, cellY, wallDir) {
     const { x: cx, z: cz } = this._cellCenter(cellX, cellY);
-    const floorY = (this.maze[cellY][cellX].elevation || 0) * STEP_HEIGHT;
-    const rng = this.rng || Math.random;
 
-    const axisRotation = wallDir === 'n' || wallDir === 's' ? 0 : Math.PI / 2;
+    const axis = wallDir === 'n' || wallDir === 's' ? 'z' : 'x';
     let px = cx,
       pz = cz;
     if (wallDir === 'n') pz = cz - CELL / 2;
@@ -927,55 +937,19 @@ export class MazeGame {
     else if (wallDir === 'w') px = cx - CELL / 2;
     else if (wallDir === 'e') px = cx + CELL / 2;
 
-    const frameMat = new THREE.MeshStandardMaterial({
-      map: new THREE.CanvasTexture(this.stoneCanvas),
-      roughness: 0.9,
-      metalness: 0.02,
-      color: 0xb9bac0,
-    });
+    const wallSpan = this._wallSpan || WALL_H + 0.1;
+    const wallCenterY = this._wallCenterY ?? WALL_H / 2 - 0.1;
+    const wallMat = this._wallMat || this._makeWallMaterial();
 
-    const group = new THREE.Group();
-    group.position.set(px, floorY, pz);
-    group.rotation.y = axisRotation;
-    group.userData.entranceDoor = true;
+    const geo =
+      axis === 'z' ? new THREE.BoxGeometry(CELL, wallSpan, 0.25) : new THREE.BoxGeometry(0.25, wallSpan, CELL);
+    const m = new THREE.Mesh(geo, wallMat);
+    m.position.set(px, wallCenterY, pz);
+    m.receiveShadow = true;
 
-    const jambGeo = new THREE.BoxGeometry(0.18, DOOR_HEIGHT + 0.3, 0.32);
-    const leftJamb = new THREE.Mesh(jambGeo, frameMat);
-    leftJamb.position.set(-DOOR_WIDTH / 2 - 0.09, (DOOR_HEIGHT + 0.3) / 2, 0);
-    leftJamb.castShadow = true;
-    leftJamb.receiveShadow = true;
-    const rightJamb = leftJamb.clone();
-    rightJamb.position.x = DOOR_WIDTH / 2 + 0.09;
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(DOOR_WIDTH + 0.54, 0.24, 0.32), frameMat);
-    lintel.position.set(0, DOOR_HEIGHT + 0.15, 0);
-    lintel.castShadow = true;
-    lintel.receiveShadow = true;
-    group.add(leftJamb, rightJamb, lintel);
-
-    const panelTex = new THREE.CanvasTexture(makeDoorPanelCanvas(rng));
-    panelTex.colorSpace = THREE.SRGBColorSpace;
-    const panelMat = new THREE.MeshStandardMaterial({
-      map: panelTex,
-      roughness: 0.85,
-      metalness: 0.05,
-    });
-    // No pivot/hinge — this door never swings, it's permanently shut.
-    const panel = new THREE.Mesh(
-      new THREE.BoxGeometry(DOOR_WIDTH, DOOR_HEIGHT, DOOR_THICKNESS),
-      panelMat,
-    );
-    panel.position.set(0, DOOR_HEIGHT / 2, 0);
-    panel.castShadow = true;
-    panel.receiveShadow = true;
-    group.add(panel);
-
-    const light = new THREE.PointLight(0xf7dca0, 10, 5, 2);
-    light.position.set(0, DOOR_HEIGHT * 0.6, 0.6);
-    group.add(light);
-
-    this.scene.add(group);
-    this.entranceDoor = group;
-    this.doors.push(group);
+    this.scene.add(m);
+    this.wallMeshes.push(m);
+    this.entranceDoor = null;
   }
 
   setSeed(seed) {
@@ -987,32 +961,21 @@ export class MazeGame {
 
   loadLevel(n, entryLetter) {
     this.level = n;
-    // Floor label = level number + the single exit letter you just came
-    // through, e.g. 1 -> 2A/2B/2C -> 3A/3B/3C ... Level 1 has no entry
-    // letter (nothing to have come through yet), so it's just "1".
     this.floorLabel = entryLetter ? `${n}${entryLetter.toUpperCase()}` : String(n);
     const { w, h } = sizeForLevel(n);
     this.mazeW = w;
     this.mazeH = h;
-
     this.rng = createRng(levelSeed(this.baseSeed, n));
-
     this.maze = generateMaze(w, h, this.rng);
-
     assignElevations(this.maze, w, h, 0, 0, this.rng);
-
     assignObstacles(this.maze, w, h, 0, 0, this.rng);
     this.surfaceMap = generateSurfaceMap(w, h, this.rng);
-
     const exitCells = pickExits(this.maze, w, h, 0, 0, this.rng);
     this.exits = exitCells.map((e, i) => ({ ...e, letter: EXIT_LETTERS[i] || String(i + 1) }));
     this.discoveredExits = new Set();
-
     const origin = this._buildMazeMeshes(this.maze, w, h);
     this.mazeOrigin = origin;
-
     this._buildDoors(this.exits);
-
     for (const exit of this.exits) {
       exit.distGrid = bfsDistances(this.maze, w, h, exit.x, exit.y);
       exit.totalDist = Math.max(1, exit.distGrid[0][0]);
@@ -1032,8 +995,6 @@ export class MazeGame {
           spawnY = anchor.y;
         }
       }
-      // Arriving from a previous level: seal the way we came in behind a
-      // door built into a real wall of the spawn cell.
       entranceWallDir = this._pickEntranceWallDir(spawnX, spawnY);
       if (entranceWallDir) this._buildEntranceDoor(spawnX, spawnY, entranceWallDir);
     }
@@ -1057,16 +1018,7 @@ export class MazeGame {
     this._strideDist = 0;
     this.currentPlayerSpeed = 0;
     this.currentSurface = (this.surfaceMap[spawnY] && this.surfaceMap[spawnY][spawnX]) || 'stone';
-
-    // Push the reset immediately — the animate loop only reports progress
-    // while `running`, but the bar should reflect the new level (and the
-    // fact that the door just crossed is now an entrance, not an exit) the
-    // instant the level is built, not only once play resumes.
     if (this.callbacks.onProgress) this.callbacks.onProgress(this.displayProgress);
-
-    // Fires once the floor is fully generated and ready — use this to show
-    // "Entering 2A" (or however you want it worded) at the start of a level,
-    // e.g. as a toast.
     if (this.callbacks.onFloorEnter) {
       this.callbacks.onFloorEnter(this.floorLabel, { level: n, entryLetter: entryLetter || null });
     }
@@ -1467,10 +1419,6 @@ export class MazeGame {
     this.torchTarget.position
       .copy(this.torch.position)
       .addScaledVector(this._torchForward, TORCH_THROW);
-
-    // Sit the glow slightly ahead of the player rather than right on top of
-    // the camera, so it reads as "torchlight spilling outward" rather than
-    // a flat glow centered on the eyes.
     this.torchGlow.position
       .copy(this.torch.position)
       .addScaledVector(this._torchForward, 1.1);
@@ -1481,12 +1429,6 @@ export class MazeGame {
   }
 
   _setDoorLook(exit) {
-    // Doors now open and carry you through automatically as you approach —
-    // there's no "press E" step and therefore no interact prompt/dialog to
-    // drive, so we intentionally no longer fire callbacks.onDoorLookAt here.
-    // (_doorLookTarget is kept only for _tryInteractDoor, which still works
-    // as a harmless no-op/fallback since doors will usually already be open
-    // by the time it could fire.)
     this._doorLookTarget = exit || null;
   }
 
@@ -1555,13 +1497,22 @@ export class MazeGame {
     this._playDoorSlam();
     this.descend(exit.letter);
   }
+  
+  _applyPortalAnim(exit, dt) {
+    const t = this._easeOutCubic(exit.doorAnimT);
+    if (exit.portalMat) exit.portalMat.opacity = t;
+    if (exit.portalLight) exit.portalLight.intensity = 18 * t;
+    if (exit.portalMat && exit.portalMat.map && dt) {
+      exit.portalMat.map.offset.y = (exit.portalMat.map.offset.y + dt * 0.06) % 1;
+      exit.portalMat.map.offset.x = (exit.portalMat.map.offset.x + dt * 0.017) % 1;
+    }
+  }
 
   _updateDoors(dt) {
     if (!this.exits) return;
     for (const exit of this.exits) {
+      if (exit.doorState !== 'closed') this._applyPortalAnim(exit, dt);
       if (exit.doorState === 'closed') {
-        // Fully automatic now: walking up to a door opens it, no keypress
-        // or prompt needed. _openDoor() itself gates on DOOR_INTERACT_DIST.
         this._openDoor(exit);
         continue;
       }
@@ -1570,27 +1521,17 @@ export class MazeGame {
 
       if (exit.doorState === 'opening') {
         exit.doorAnimT = Math.min(1, exit.doorAnimT + dt / DOOR_OPEN_DURATION);
-        exit.doorPivot.rotation.y = -DOOR_OPEN_ANGLE * this._easeOutCubic(exit.doorAnimT);
         if (exit.doorAnimT >= 1) {
           exit.doorState = 'open';
           exit.doorOpenAt = this.elapsed;
         }
       } else if (exit.doorState === 'closing') {
         exit.doorAnimT = Math.max(0, exit.doorAnimT - dt / DOOR_CLOSE_DURATION);
-        exit.doorPivot.rotation.y = -DOOR_OPEN_ANGLE * this._easeOutCubic(exit.doorAnimT);
         if (exit.doorAnimT <= 0) {
           exit.doorState = 'closed';
         }
       } else if (exit.doorState === 'open') {
         if (crossed) {
-          // _enterDoor() -> descend() -> loadLevel() runs synchronously and
-          // replaces this.exits/this.player position right now, mid-loop.
-          // We must stop entirely rather than `continue` — otherwise this
-          // for-of keeps iterating the OLD (now-decommissioned) exits array
-          // and can compare the just-teleported player position against a
-          // stale door from the level we just left, sometimes landing
-          // within range purely by coincidence and firing a second descend
-          // in the same frame (the "skips a level" bug).
           this._enterDoor(exit);
           return;
         }
@@ -1678,17 +1619,6 @@ export class MazeGame {
   descend(letter) {
     if (!this.discoveredExits || !this.discoveredExits.has(letter)) return false;
     const fromLevel = this.level;
-    // Build the next level right now — the door you just walked through
-    // becomes a sealed, non-openable entrance on the other side, and the
-    // progress bar resets as part of loadLevel(). loadLevel() runs
-    // synchronously, so we deliberately do NOT call stop()/resume() around
-    // it: this.running, pointer lock, and audio all stay exactly as they
-    // were. (stop() exits pointer lock, and that exit event only reaches
-    // the browser's pointerlockchange handler asynchronously — by the time
-    // it did, resume() had already flipped running back to true, so the
-    // handler mistook the leftover event for the player hitting Escape
-    // mid-game and auto-paused. Not touching lock/running here avoids the
-    // whole race.)
     this._setDoorLook(null);
     this.loadLevel(fromLevel + 1, letter);
     if (this.callbacks.onDescend) {
