@@ -22,9 +22,7 @@ export default function App() {
 
   const [phase, setPhase] = useState('menu'); 
   const [paused, setPaused] = useState(false);
-  const [pendingLevel, setPendingLevel] = useState(1);
-  const [pendingEntryLetter, setPendingEntryLetter] = useState(null);
-  const [level, setLevel] = useState(1);
+  const [floorLabel, setFloorLabel] = useState('1');
   const [progress, setProgress] = useState(0);
   const [time, setTime] = useState(0);
   const [flash, setFlash] = useState(false);
@@ -34,6 +32,7 @@ export default function App() {
   const [activeSeed, setActiveSeed] = useState(null);
   const [discoveredExits, setDiscoveredExits] = useState([]); 
   const [exitToast, setExitToast] = useState(null); 
+  const [doorPrompt, setDoorPrompt] = useState(null);
 
   
   useEffect(() => {
@@ -42,6 +41,7 @@ export default function App() {
       onProgress: (p) => setProgress(p),
       onTime: (t) => setTime(t),
       onAutoPause: () => setPaused(true),
+      onDoorLookAt: (info) => setDoorPrompt(info),
       
       
       onExitFound: (letter, info) => {
@@ -51,16 +51,18 @@ export default function App() {
         setExitToast(info.nextLabel);
         setTimeout(() => setExitToast((cur) => (cur === info.nextLabel ? null : cur)), 2200);
       },
-      onDescend: (finishedLevel, letter) => {
-        setPaused(false);
+      onDescend: (newLevel, letter, fromLevel, newFloorLabel) => {
+        // MazeGame.descend() no longer touches running/pointer-lock/audio —
+        // it just rebuilds the next floor in place and keeps playing, so
+        // there's nothing to resume here. See the comment on descend()
+        // itself for why (it used to call stop(), which caused a spurious
+        // auto-pause right after every descent).
+        setDoorPrompt(null);
         setFlash(true);
         setTimeout(() => setFlash(false), 400);
-        setTimeout(() => {
-          setPendingLevel(finishedLevel + 1);
-          setPendingEntryLetter(letter);
-          setDiscoveredExits([]);
-          setPhase('menu');
-        }, 550);
+        setFloorLabel(newFloorLabel);
+        setDiscoveredExits([]);
+        setExitToast(null);
       },
     });
     gameRef.current = game;
@@ -85,34 +87,21 @@ export default function App() {
   const startGame = useCallback(() => {
     const game = gameRef.current;
     if (!game) return;
-    
-    
-    
-    
-    if (pendingLevel === 1) {
-      const chosen = seedMode === 'custom' && customSeed.trim() !== '' ? customSeed.trim() : undefined;
-      const resolved = game.setSeed(chosen);
-      setActiveSeed(resolved);
-    }
-    game.loadLevel(pendingLevel, pendingEntryLetter);
-    setLevel(pendingLevel);
+    const chosen = seedMode === 'custom' && customSeed.trim() !== '' ? customSeed.trim() : undefined;
+    const resolved = game.setSeed(chosen);
+    setActiveSeed(resolved);
+    game.loadLevel(1, null);
+    setFloorLabel('1');
     setTime(0);
     setProgress(0);
     setPaused(false);
     setDiscoveredExits([]);
     setExitToast(null);
+    setDoorPrompt(null);
     game.start();
     setPhase('playing');
     game.requestPointerLock();
-  }, [pendingLevel, pendingEntryLetter, seedMode, customSeed]);
-
-  
-  
-  const descendVia = useCallback((letter) => {
-    const game = gameRef.current;
-    if (!game) return;
-    game.descend(letter);
-  }, []);
+  }, [seedMode, customSeed]);
 
   const pauseGame = useCallback(() => {
     const game = gameRef.current;
@@ -158,7 +147,7 @@ export default function App() {
           <div className="crosshair" />
           <div className="hud">
             <div className="top-bar">
-              <div className="stat">LEVEL <b>{String(level).padStart(2, '0')}</b></div>
+              <div className="stat">LEVEL <b>{floorLabel}</b></div>
               <div className="stat">TIME <b>{formatTime(time)}</b></div>
             </div>
           </div>
@@ -176,10 +165,14 @@ export default function App() {
           {exitToast && (
             <div className="exit-toast">EXIT {exitToast} FOUND</div>
           )}
-          <div className={`hint ${discoveredExits.length > 0 ? 'hint-active' : ''}`}>
-            {discoveredExits.length > 0
-              ? 'esc to descend or keep exploring'
-              : <>wasd + mouse &middot;  esc to pause</>}
+          {doorPrompt && !paused && (
+            <div className="door-prompt">
+              <span className="door-prompt-key">E</span>
+              open the door to {doorPrompt.nextLabel}
+            </div>
+          )}
+          <div className="hint">
+            wasd + mouse &middot; e to open doors &middot; esc to pause
           </div>
         </>
       )}
@@ -195,15 +188,11 @@ export default function App() {
             )}
             {discoveredExits.length > 0 && (
               <div className="descend-block">
-                <div className="descend-hint">an exit found</div>
+                <div className="descend-hint">doors opened so far</div>
                 {discoveredExits.map((e) => (
-                  <button
-                    key={e.letter}
-                    className="descend-btn"
-                    onClick={() => descendVia(e.letter)}
-                  >
-                    Descend into {e.nextLabel}
-                  </button>
+                  <div key={e.letter} className="found-door-readout">
+                    {e.nextLabel}
+                  </div>
                 ))}
               </div>
             )}
@@ -220,9 +209,7 @@ export default function App() {
               </button>
               <span>{musicOn ? 'On' : 'Off'}</span>
             </div>
-            <button onClick={resumeGame}>
-              {discoveredExits.length > 0 ? 'Keep Exploring' : 'Resume'}
-            </button>
+            <button onClick={resumeGame}>Resume</button>
           </div>
         </div>
       )}
@@ -233,51 +220,35 @@ export default function App() {
         <div className="overlay">
           <div className="panel">
             <h1>DEEPWALK<span>.</span></h1>
-            <div className="lvl-readout">
-              NEXT DESCENT &nbsp;&middot;&nbsp; LEVEL <b>{String(pendingLevel).padStart(2, '0')}</b>
-            </div>
-            {pendingEntryLetter && (
-              <div className="entry-readout">
-                ARRIVING VIA &nbsp;<b>{pendingLevel}{pendingEntryLetter}</b>
-              </div>
-            )}
 
-            {pendingLevel === 1 ? (
-              <div className="seed-block">
-                <div className="seed-tabs">
-                  <button
-                    type="button"
-                    className={`seed-tab ${seedMode === 'random' ? 'active' : ''}`}
-                    onClick={() => setSeedMode('random')}
-                  >
-                    Random Seed
-                  </button>
-                  <button
-                    type="button"
-                    className={`seed-tab ${seedMode === 'custom' ? 'active' : ''}`}
-                    onClick={() => setSeedMode('custom')}
-                  >
-                    Custom Seed
-                  </button>
-                </div>
-                {seedMode === 'custom' && (
-                  <input
-                    type="text"
-                    className="seed-input"
-                    placeholder="type a seed…"
-                    value={customSeed}
-                    onChange={(e) => setCustomSeed(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') startGame(); }}
-                  />
-                )}
+            <div className="seed-block">
+              <div className="seed-tabs">
+                <button
+                  type="button"
+                  className={`seed-tab ${seedMode === 'random' ? 'active' : ''}`}
+                  onClick={() => setSeedMode('random')}
+                >
+                  Random Seed
+                </button>
+                <button
+                  type="button"
+                  className={`seed-tab ${seedMode === 'custom' ? 'active' : ''}`}
+                  onClick={() => setSeedMode('custom')}
+                >
+                  Custom Seed
+                </button>
               </div>
-            ) : (
-              activeSeed && (
-                <div className="seed-readout">
-                  SEED &nbsp;<b>{activeSeed}</b>
-                </div>
-              )
-            )}
+              {seedMode === 'custom' && (
+                <input
+                  type="text"
+                  className="seed-input"
+                  placeholder="type a seed…"
+                  value={customSeed}
+                  onChange={(e) => setCustomSeed(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') startGame(); }}
+                />
+              )}
+            </div>
 
             <div className="toggle-row">
               <span>Music</span>
@@ -292,11 +263,9 @@ export default function App() {
               </button>
               <span>{musicOn ? 'On' : 'Off'}</span>
             </div>
-            <button onClick={startGame}>
-              {pendingLevel === 1 ? 'Strike the torch' : 'Descend further'}
-            </button>
+            <button onClick={startGame}>Strike the torch</button>
             <div className="keys">
-              <b>W A S D</b> move &nbsp;&middot;&nbsp; <b>SPACE</b> jump &nbsp;&middot;&nbsp; <b>CTRL</b> crouch &nbsp;&middot;&nbsp; <b>ESC</b> pause
+              <b>W A S D</b> move &nbsp;&middot;&nbsp; <b>SPACE</b> jump &nbsp;&middot;&nbsp; <b>CTRL</b> crouch &nbsp;&middot;&nbsp; <b>E</b> open door &nbsp;&middot;&nbsp; <b>ESC</b> pause
             </div>
           </div>
         </div>
