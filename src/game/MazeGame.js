@@ -64,7 +64,7 @@ const ANCHOR_POOL_SIZE = EXIT_LETTERS.length;
 
 const SURFACE_TYPES = ['stone', 'grass', 'mud', 'water'];
 const STAIN_TYPES = ['blood', 'mud', 'damp'];
-const STAIN_CHANCE = 0.1;
+const STAIN_CHANCE = 0.45; 
 
 function makeStoneCanvas() {
   const c = document.createElement('canvas');
@@ -255,12 +255,37 @@ function makePortalCanvas(rng = Math.random) {
   return c;
 }
 
-function makeRampGeometry(size, ownY, neighborY, dir) {
-  const lowY = Math.min(ownY, neighborY) - 0.5; // Drop down below floor to seal gaps
-
-  let nwY, neY, swY, seY;
+function makeMistCanvas() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
   
-  // Figure out which sides are high and low based on the ramp direction
+  grad.addColorStop(0, 'rgba(60, 10, 15, 0.8)');
+  grad.addColorStop(0.4, 'rgba(30, 5, 8, 0.4)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  return c;
+}
+
+function makeDustCanvas() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  
+  grad.addColorStop(0, 'rgba(255, 60, 20, 1.0)');
+  grad.addColorStop(0.3, 'rgba(200, 20, 0, 0.8)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 32, 32);
+  return c;
+}
+
+function makeRampGeometry(size, ownY, neighborY, dir) {
+  const lowY = Math.min(ownY, neighborY) - 0.5; 
+  let nwY, neY, swY, seY;
   if (dir === 'n') {
     nwY = neY = neighborY;
     swY = seY = ownY;
@@ -270,37 +295,27 @@ function makeRampGeometry(size, ownY, neighborY, dir) {
   } else if (dir === 'w') {
     nwY = swY = neighborY;
     neY = seY = ownY;
-  } else { // 'e'
+  } else { 
     nwY = swY = ownY;
     neY = seY = neighborY;
   }
-
-  // Create a solid box instead of a flat plane
   const geo = new THREE.BoxGeometry(size, 1, size);
   const pos = geo.attributes.position;
-
-  // Move the vertices to create the sloped wedge shape
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const y = pos.getY(i);
     const z = pos.getZ(i);
-
     const isNorth = z < 0;
     const isWest = x < 0;
-
     if (y > 0) { 
-      // Sloped top vertices
       if (isNorth && isWest) pos.setY(i, nwY);
       else if (isNorth && !isWest) pos.setY(i, neY);
       else if (!isNorth && isWest) pos.setY(i, swY);
       else pos.setY(i, seY);
     } else { 
-      // Flat bottom vertices hidden underground
       pos.setY(i, lowY);
     }
   }
-
-  // Recalculate lighting for the new solid shape
   geo.computeVertexNormals();
   return geo;
 }
@@ -309,9 +324,7 @@ export class MazeGame {
   constructor(container, callbacks = {}) {
     this.container = container;
     this.callbacks = callbacks;
-
     this.baseSeed = hashSeed(callbacks.seed);
-
     this.seedString =
       callbacks.seed !== undefined && callbacks.seed !== null && callbacks.seed !== ''
         ? String(callbacks.seed)
@@ -357,13 +370,12 @@ export class MazeGame {
     this._lookDir = new THREE.Vector3();
 
     this._initThree();
+    this._buildAtmosphere();
     this._bindInput();
     this._animate = this._animate.bind(this);
     this.clock = new THREE.Clock();
     this._raf = requestAnimationFrame(this._animate);
-
     this._scheduleGhostFootsteps();
-
     this._onResize();
     requestAnimationFrame(() => this._onResize());
   }
@@ -373,7 +385,7 @@ export class MazeGame {
     const h = this.container.clientHeight || window.innerHeight || 1;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x000000, 0.09);
+    this.scene.fog = new THREE.FogExp2(0x020101, 0.18); 
 
     this.camera = new THREE.PerspectiveCamera(70, w / h, 0.1, 100);
     this.camera.position.set(0, EYE_HEIGHT, 0);
@@ -384,11 +396,12 @@ export class MazeGame {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    
     this.container.appendChild(this.renderer.domElement);
 
-    this.scene.add(new THREE.HemisphereLight(0x4a4d55, 0x1a1a1c, 0.9));
-
-    this.torch = new THREE.SpotLight(0xffdca8, 100, 20, TORCH_ANGLE, 0.6, 1.3);
+    this.scene.add(new THREE.HemisphereLight(0x2a2d35, 0x0a0a0c, 0.15));
+    
+    this.torch = new THREE.SpotLight(0xffc27a, 250, 35, TORCH_ANGLE, 0.8, 1.5);
     this.torch.castShadow = true;
     this.torch.shadow.mapSize.set(1024, 1024);
     this.torch.shadow.bias = -0.002;
@@ -401,12 +414,13 @@ export class MazeGame {
     this.torchPitch = this.pitch;
     this._torchEuler = new THREE.Euler();
     this._torchForward = new THREE.Vector3();
-    this.torchGlow = new THREE.PointLight(0xffb37a, 14, TORCH_GLOW_RADIUS, 2);
+    this.torchGlow = new THREE.PointLight(0xff6020, 14, TORCH_GLOW_RADIUS, 2);
     this.scene.add(this.torchGlow);
-    this.fillLight = new THREE.PointLight(0xffb37a, 4, 2, 2);
+    this.fillLight = new THREE.PointLight(0xff4020, 2, 2, 2);
     this.camera.add(this.fillLight);
     this.fillLight.position.set(0, -0.1, 0.3);
     this.scene.add(this.camera);
+    
     this._onResize = () => {
       const clientWidth = this.container.clientWidth || window.innerWidth || 1;
       const clientHeight = this.container.clientHeight || window.innerHeight || 1;
@@ -415,6 +429,134 @@ export class MazeGame {
       this.renderer.setSize(clientWidth, clientHeight);
     };
     window.addEventListener('resize', this._onResize);
+  }
+
+  _buildAtmosphere() {
+    this._mistTex = new THREE.CanvasTexture(makeMistCanvas());
+    this._mistCount = 220; 
+    this._mistRadius = 10; 
+    this._mistMinRadius = 1.5; 
+    this._mistData = [];
+
+    const mistGeo = new THREE.BufferGeometry();
+    const mistPos = new Float32Array(this._mistCount * 3);
+    for (let i = 0; i < this._mistCount; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = this._mistMinRadius + Math.random() * (this._mistRadius - this._mistMinRadius);
+      const x = this.player.x + Math.cos(ang) * r;
+      const z = this.player.z + Math.sin(ang) * r;
+      const y = 0.05 + Math.random() * 0.3;
+      mistPos[i * 3] = x;
+      mistPos[i * 3 + 1] = y;
+      mistPos[i * 3 + 2] = z;
+      this._mistData.push({
+        vx: (Math.random() - 0.5) * 0.1,
+        vz: (Math.random() - 0.5) * 0.1,
+        baseY: y,
+        bobSpeed: 0.1 + Math.random() * 0.2,
+        bobAmp: 0.03 + Math.random() * 0.05,
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+    mistGeo.setAttribute('position', new THREE.BufferAttribute(mistPos, 3));
+    const mistMat = new THREE.PointsMaterial({
+      map: this._mistTex,
+      size: 2.2, 
+      sizeAttenuation: true,
+      color: 0x4a1010, 
+      transparent: true,
+      opacity: 0.35, 
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+    });
+    this._mistPoints = new THREE.Points(mistGeo, mistMat);
+    this.scene.add(this._mistPoints);
+
+    this._dustTex = new THREE.CanvasTexture(makeDustCanvas());
+    this._dustCount = 150; 
+    this._dustRadius = 6;
+    this._dustMinRadius = 1.2;
+    this._dustData = [];
+
+    const dustGeo = new THREE.BufferGeometry();
+    const dustPos = new Float32Array(this._dustCount * 3);
+    for (let i = 0; i < this._dustCount; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = this._dustMinRadius + Math.random() * (this._dustRadius - this._dustMinRadius);
+      const x = this.player.x + Math.cos(ang) * r;
+      const z = this.player.z + Math.sin(ang) * r;
+      const y = 0.3 + Math.random() * 1.6;
+      dustPos[i * 3] = x;
+      dustPos[i * 3 + 1] = y;
+      dustPos[i * 3 + 2] = z;
+      this._dustData.push({
+        vy: 0.04 + Math.random() * 0.08,
+        driftAmp: (Math.random() - 0.5) * 0.1,
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+    const dustMat = new THREE.PointsMaterial({
+      map: this._dustTex,
+      size: 0.08, 
+      sizeAttenuation: true,
+      color: 0xff3300, 
+      transparent: true,
+      opacity: 0.7, 
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this._dustPoints = new THREE.Points(dustGeo, dustMat);
+    this.scene.add(this._dustPoints);
+  }
+
+  _updateAtmosphere(dt) {
+    const t = this.elapsed || 0;
+
+    if (this._mistPoints) {
+      const pos = this._mistPoints.geometry.attributes.position;
+      const maxR2 = this._mistRadius * this._mistRadius;
+      const minR2 = this._mistMinRadius * this._mistMinRadius;
+      for (let i = 0; i < this._mistCount; i++) {
+        const d = this._mistData[i];
+        let x = pos.getX(i) + d.vx * dt;
+        let z = pos.getZ(i) + d.vz * dt;
+        const dx = x - this.player.x,
+          dz = z - this.player.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > maxR2 || d2 < minR2) {
+          const ang = Math.random() * Math.PI * 2;
+          const r = this._mistMinRadius + Math.random() * (this._mistRadius - this._mistMinRadius);
+          x = this.player.x + Math.cos(ang) * r;
+          z = this.player.z + Math.sin(ang) * r;
+        }
+        const y = d.baseY + Math.sin(t * d.bobSpeed + d.phase) * d.bobAmp;
+        pos.setXYZ(i, x, y, z);
+      }
+      pos.needsUpdate = true;
+    }
+
+    if (this._dustPoints) {
+      const pos = this._dustPoints.geometry.attributes.position;
+      const r2 = this._dustRadius * this._dustRadius;
+      for (let i = 0; i < this._dustCount; i++) {
+        const d = this._dustData[i];
+        let x = pos.getX(i) + Math.sin(t * 0.6 + d.phase) * d.driftAmp * dt;
+        let y = pos.getY(i) + d.vy * dt;
+        let z = pos.getZ(i) + Math.cos(t * 0.6 + d.phase) * d.driftAmp * dt;
+        if (y > 2.2) y = 0.15;
+        const dx = x - this.player.x,
+          dz = z - this.player.z;
+        if (dx * dx + dz * dz > r2) {
+          const ang = Math.random() * Math.PI * 2;
+          const r = Math.random() * this._dustRadius;
+          x = this.player.x + Math.cos(ang) * r;
+          z = this.player.z + Math.sin(ang) * r;
+        }
+        pos.setXYZ(i, x, y, z);
+      }
+      pos.needsUpdate = true;
+    }
   }
 
   _bindInput() {
@@ -548,20 +690,13 @@ export class MazeGame {
   }
 
  _buildFloor(w, h) {
-    // 1. Create a thick 3D block instead of a flat plane. 
-    // Making it 4 units deep ensures it covers any elevation drops.
     const FLOOR_THICKNESS = 4.0;
     const floorGeo = new THREE.BoxGeometry(CELL, FLOOR_THICKNESS, CELL);
-    
-    // 2. We no longer need to rotate it to lay flat, so use a default rotation
     const quat = new THREE.Quaternion(); 
-    
     const originX = -(w * CELL) / 2;
     const originZ = -(h * CELL) / 2;
-
     const groups = { stone: [], grass: [], mud: [], water: [] };
     const rampCells = [];
-    
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const cell = this.maze[y][x];
@@ -573,7 +708,6 @@ export class MazeGame {
         }
       }
     }
-
     const matrix = new THREE.Matrix4();
     Object.entries(groups).forEach(([type, cells]) => {
       if (!cells.length) return;
@@ -581,12 +715,8 @@ export class MazeGame {
       cells.forEach(([x, y, elevation], i) => {
         const cx = originX + x * CELL + CELL / 2;
         const cz = originZ + y * CELL + CELL / 2;
-        
-        // 3. The top of our block needs to be at the exact floor height.
-        // Because BoxGeometry is centered, we drop the center point down by half its thickness.
         const topY = elevation * STEP_HEIGHT;
         const centerY = topY - (FLOOR_THICKNESS / 2);
-
         matrix.compose(
           new THREE.Vector3(cx, centerY, cz),
           quat,
@@ -600,7 +730,7 @@ export class MazeGame {
       this.floorMeshes.push(mesh);
     });
 
-    // Generate ramps (your existing ramp code will work perfectly with this)
+    
     for (const { x, y, type, cell } of rampCells) {
       const cx = originX + x * CELL + CELL / 2;
       const cz = originZ + y * CELL + CELL / 2;
@@ -1250,7 +1380,7 @@ export class MazeGame {
   }
 
   _scheduleGhostFootsteps() {
-    const delay = 13000 + Math.random() * 25000;
+    const delay = 4000 + Math.random() * 8000; 
     this._ghostTimer = setTimeout(() => {
       if (this.running) this._playGhostFootsteps();
       this._scheduleGhostFootsteps();
@@ -1431,12 +1561,19 @@ export class MazeGame {
 
   _updateBattery(dt) {
     this.batteryLevel = Math.max(0, this.batteryLevel - dt * 0.004);
-    let intensity = 30;
+    
+    
+    let intensity = 250; 
+    
     if (this.batteryLevel < 0.25) {
       intensity *= (0.55 + 0.45 * Math.sin(this.elapsed * 30)) * (0.5 + this.batteryLevel * 2);
     }
+    
     this.torch.intensity = intensity;
-    this.torchGlow.intensity = (intensity / 100) * 14;
+    
+    
+    this.torchGlow.intensity = (intensity / 100) * 14; 
+    
     if (this.callbacks.onBatteryChange) this.callbacks.onBatteryChange(this.batteryLevel);
   }
 
@@ -1695,6 +1832,7 @@ export class MazeGame {
     this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
     this.camera.position.set(this.player.x, this.player.y, this.player.z);
     this._updateTorch(dt);
+    this._updateAtmosphere(dt);
 
     this.renderer.render(this.scene, this.camera);
   }
@@ -1711,6 +1849,18 @@ export class MazeGame {
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     this.renderer.domElement.removeEventListener('click', this._onClick);
     this._clearMazeMeshes();
+    if (this._mistPoints) {
+      this.scene.remove(this._mistPoints);
+      this._mistPoints.geometry.dispose();
+      this._mistPoints.material.dispose();
+    }
+    if (this._mistTex) this._mistTex.dispose();
+    if (this._dustPoints) {
+      this.scene.remove(this._dustPoints);
+      this._dustPoints.geometry.dispose();
+      this._dustPoints.material.dispose();
+    }
+    if (this._dustTex) this._dustTex.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode) {
       this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
