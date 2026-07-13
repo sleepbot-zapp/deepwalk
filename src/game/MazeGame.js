@@ -256,26 +256,51 @@ function makePortalCanvas(rng = Math.random) {
 }
 
 function makeRampGeometry(size, ownY, neighborY, dir) {
-  const s = size / 2;
-  let positions;
-  let indices;
+  const lowY = Math.min(ownY, neighborY) - 0.5; // Drop down below floor to seal gaps
+
+  let nwY, neY, swY, seY;
+  
+  // Figure out which sides are high and low based on the ramp direction
   if (dir === 'n') {
-    positions = [-s, neighborY, -s, s, neighborY, -s, s, ownY, s, -s, ownY, s];
-    indices = [0, 2, 1, 0, 3, 2];
+    nwY = neY = neighborY;
+    swY = seY = ownY;
   } else if (dir === 's') {
-    positions = [-s, ownY, -s, s, ownY, -s, s, neighborY, s, -s, neighborY, s];
-    indices = [0, 2, 1, 0, 3, 2];
+    nwY = neY = ownY;
+    swY = seY = neighborY;
   } else if (dir === 'w') {
-    positions = [-s, neighborY, -s, -s, neighborY, s, s, ownY, s, s, ownY, -s];
-    indices = [0, 1, 2, 0, 2, 3];
-  } else {
-    positions = [-s, ownY, -s, -s, ownY, s, s, neighborY, s, s, neighborY, -s];
-    indices = [0, 1, 2, 0, 2, 3];
+    nwY = swY = neighborY;
+    neY = seY = ownY;
+  } else { // 'e'
+    nwY = swY = ownY;
+    neY = seY = neighborY;
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
-  geo.setIndex(indices);
+
+  // Create a solid box instead of a flat plane
+  const geo = new THREE.BoxGeometry(size, 1, size);
+  const pos = geo.attributes.position;
+
+  // Move the vertices to create the sloped wedge shape
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+
+    const isNorth = z < 0;
+    const isWest = x < 0;
+
+    if (y > 0) { 
+      // Sloped top vertices
+      if (isNorth && isWest) pos.setY(i, nwY);
+      else if (isNorth && !isWest) pos.setY(i, neY);
+      else if (!isNorth && isWest) pos.setY(i, swY);
+      else pos.setY(i, seY);
+    } else { 
+      // Flat bottom vertices hidden underground
+      pos.setY(i, lowY);
+    }
+  }
+
+  // Recalculate lighting for the new solid shape
   geo.computeVertexNormals();
   return geo;
 }
@@ -522,14 +547,21 @@ export class MazeGame {
     wallMesh.add(stain);
   }
 
-  _buildFloor(w, h) {
-    const planeGeo = new THREE.PlaneGeometry(CELL, CELL);
-    const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+ _buildFloor(w, h) {
+    // 1. Create a thick 3D block instead of a flat plane. 
+    // Making it 4 units deep ensures it covers any elevation drops.
+    const FLOOR_THICKNESS = 4.0;
+    const floorGeo = new THREE.BoxGeometry(CELL, FLOOR_THICKNESS, CELL);
+    
+    // 2. We no longer need to rotate it to lay flat, so use a default rotation
+    const quat = new THREE.Quaternion(); 
+    
     const originX = -(w * CELL) / 2;
     const originZ = -(h * CELL) / 2;
 
     const groups = { stone: [], grass: [], mud: [], water: [] };
     const rampCells = [];
+    
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const cell = this.maze[y][x];
@@ -545,12 +577,18 @@ export class MazeGame {
     const matrix = new THREE.Matrix4();
     Object.entries(groups).forEach(([type, cells]) => {
       if (!cells.length) return;
-      const mesh = new THREE.InstancedMesh(planeGeo, this._floorMaterials[type], cells.length);
+      const mesh = new THREE.InstancedMesh(floorGeo, this._floorMaterials[type], cells.length);
       cells.forEach(([x, y, elevation], i) => {
         const cx = originX + x * CELL + CELL / 2;
         const cz = originZ + y * CELL + CELL / 2;
+        
+        // 3. The top of our block needs to be at the exact floor height.
+        // Because BoxGeometry is centered, we drop the center point down by half its thickness.
+        const topY = elevation * STEP_HEIGHT;
+        const centerY = topY - (FLOOR_THICKNESS / 2);
+
         matrix.compose(
-          new THREE.Vector3(cx, elevation * STEP_HEIGHT, cz),
+          new THREE.Vector3(cx, centerY, cz),
           quat,
           new THREE.Vector3(1, 1, 1),
         );
@@ -562,6 +600,7 @@ export class MazeGame {
       this.floorMeshes.push(mesh);
     });
 
+    // Generate ramps (your existing ramp code will work perfectly with this)
     for (const { x, y, type, cell } of rampCells) {
       const cx = originX + x * CELL + CELL / 2;
       const cz = originZ + y * CELL + CELL / 2;
@@ -1392,7 +1431,7 @@ export class MazeGame {
 
   _updateBattery(dt) {
     this.batteryLevel = Math.max(0, this.batteryLevel - dt * 0.004);
-    let intensity = 90;
+    let intensity = 30;
     if (this.batteryLevel < 0.25) {
       intensity *= (0.55 + 0.45 * Math.sin(this.elapsed * 30)) * (0.5 + this.batteryLevel * 2);
     }
