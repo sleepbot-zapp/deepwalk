@@ -171,9 +171,6 @@ export default function App() {
               open the door to {doorPrompt.nextLabel}
             </div>
           )}
-          <div className="hint">
-            wasd + mouse &middot; e to open doors &middot; esc to pause
-          </div>
         </>
       )}
 
