@@ -335,6 +335,18 @@ export class MazeGame {
     this.pitch = 0;
     this.player = { x: 0, z: 0, y: EYE_HEIGHT };
 
+    // Touch/mobile support: on-screen joystick drives movement instead of
+    // WASD, and a full-screen drag surface feeds the same yaw/pitch look
+    // that mouse-move drives on desktop. Both are optional — nothing here
+    // is used unless the React layer (App.jsx / TouchControls) calls into
+    // it, so desktop behavior is untouched.
+    this.isTouchDevice =
+      typeof window !== 'undefined' &&
+      (('ontouchstart' in window) || navigator.maxTouchPoints > 0) &&
+      window.matchMedia &&
+      window.matchMedia('(pointer: coarse)').matches;
+    this._joystickVec = null; 
+
     this.currentEyeHeight = EYE_HEIGHT;
     this.verticalOffset = 0;
     this.verticalVelocity = 0;
@@ -585,6 +597,7 @@ export class MazeGame {
     };
 
     this._onClick = () => {
+      if (this.isTouchDevice) return;
       if (this.running && document.pointerLockElement !== this.renderer.domElement) {
         this.requestPointerLock();
         return;
@@ -595,6 +608,7 @@ export class MazeGame {
     };
 
     this._onPointerLockChange = () => {
+      if (this.isTouchDevice) return;
       const locked = document.pointerLockElement === this.renderer.domElement;
       if (!locked && this.running) {
         this.pause();
@@ -609,7 +623,46 @@ export class MazeGame {
   }
 
   requestPointerLock() {
+    if (this.isTouchDevice) return;
     this.renderer.domElement.requestPointerLock();
+  }
+
+  // ---- Touch control API (called by the React touch-control overlay) ----
+
+  // x and z are each in [-1, 1]: x is strafe (right positive), z matches
+  // the sign convention _updateMovement already uses for W/S (forward is
+  // negative). Magnitude below 1 means "walk slower"; magnitude above
+  // ~0.85 is treated like holding Shift (run).
+  setJoystickVector(x, z) {
+    this._joystickVec = { x, z };
+  }
+
+  clearJoystick() {
+    this._joystickVec = null;
+  }
+
+  // dx/dy are raw touch-movement pixel deltas, applied with the same
+  // sensitivity constant the mouse path uses.
+  lookDelta(dx, dy) {
+    this.yaw -= dx * 0.0026;
+    this.pitch -= dy * 0.0026;
+    this.pitch = Math.max(-1.2, Math.min(1.2, this.pitch));
+  }
+
+  tryJump() {
+    this._tryJump();
+  }
+
+  setCrouch(active) {
+    this.crouchToggled = active;
+  }
+
+  toggleCrouch() {
+    this.crouchToggled = !this.crouchToggled;
+  }
+
+  interact() {
+    this._tryInteractDoor();
   }
 
   _makeWallMaterial() {
@@ -1399,6 +1452,7 @@ export class MazeGame {
     this.running = false;
     this.audio.pause();
     this._setDoorLook(null);
+    this._joystickVec = null;
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock();
     }
@@ -1489,22 +1543,43 @@ export class MazeGame {
   _updateMovement(dt) {
     let mx = 0,
       mz = 0;
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) mz -= 1;
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) mz += 1;
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) mx -= 1;
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) mx += 1;
-    if (mx === 0 && mz === 0) {
-      this.currentPlayerSpeed = 0;
-      return;
+    let magnitude = 1;
+    const jv = this._joystickVec;
+    const joystickActive = jv && (Math.abs(jv.x) > 0.001 || Math.abs(jv.z) > 0.001);
+
+    if (joystickActive) {
+      mx = jv.x;
+      mz = jv.z;
+      magnitude = Math.min(1, Math.hypot(mx, mz));
+      if (magnitude < 0.08) {
+        this.currentPlayerSpeed = 0;
+        return;
+      }
+    } else {
+      if (this.keys['KeyW'] || this.keys['ArrowUp']) mz -= 1;
+      if (this.keys['KeyS'] || this.keys['ArrowDown']) mz += 1;
+      if (this.keys['KeyA'] || this.keys['ArrowLeft']) mx -= 1;
+      if (this.keys['KeyD'] || this.keys['ArrowRight']) mx += 1;
+      if (mx === 0 && mz === 0) {
+        this.currentPlayerSpeed = 0;
+        return;
+      }
     }
 
-    const len = Math.hypot(mx, mz);
+    const len = Math.hypot(mx, mz) || 1;
     mx /= len;
     mz /= len;
 
-    const running = (this.keys['ShiftLeft'] || this.keys['ShiftRight']) && !this.crouching;
+    // Pushing the stick most of the way to its edge counts as running,
+    // same idea as holding Shift on desktop.
+    const touchRunning = joystickActive && magnitude > 0.85;
+    const running =
+      ((this.keys['ShiftLeft'] || this.keys['ShiftRight']) || touchRunning) && !this.crouching;
     const speedPerSec =
-      MOVE_SPEED * (running ? RUN_MULT : 1) * (this.crouching ? CROUCH_SPEED_MULT : 1);
+      MOVE_SPEED *
+      (running ? RUN_MULT : 1) *
+      (this.crouching ? CROUCH_SPEED_MULT : 1) *
+      (joystickActive ? magnitude : 1);
     this.currentPlayerSpeed = speedPerSec;
     const step = speedPerSec * dt;
 

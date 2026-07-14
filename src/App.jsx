@@ -1,6 +1,21 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { MazeGame } from './game/MazeGame.js';
+import TouchControls from './TouchControls.jsx';
 import './index.css';
+
+function detectTouchDevice() {
+  if (typeof window === 'undefined') return false;
+  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const coarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  return hasTouch && coarsePointer;
+}
+
+function isPortrait() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia
+    ? window.matchMedia('(orientation: portrait)').matches
+    : window.innerHeight > window.innerWidth;
+}
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -33,6 +48,22 @@ export default function App() {
   const [discoveredExits, setDiscoveredExits] = useState([]); 
   const [exitToast, setExitToast] = useState(null); 
   const [doorPrompt, setDoorPrompt] = useState(null);
+  const [crouchOn, setCrouchOn] = useState(false);
+
+  const [isTouchDevice] = useState(detectTouchDevice);
+  const [portrait, setPortrait] = useState(isPortrait);
+
+  useEffect(() => {
+    if (!isTouchDevice) return;
+    const update = () => setPortrait(isPortrait());
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
+  }, [isTouchDevice]);
 
   
   useEffect(() => {
@@ -95,13 +126,21 @@ export default function App() {
     setTime(0);
     setProgress(0);
     setPaused(false);
+    setCrouchOn(false);
     setDiscoveredExits([]);
     setExitToast(null);
     setDoorPrompt(null);
     game.start();
     setPhase('playing');
     game.requestPointerLock();
-  }, [seedMode, customSeed]);
+
+    // Best-effort landscape lock — has to happen inside a user gesture.
+    // Not supported on iOS Safari at all, and some Android browsers only
+    // allow it in fullscreen, so failures here are expected and silent.
+    if (isTouchDevice && screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('landscape').catch(() => {});
+    }
+  }, [seedMode, customSeed, isTouchDevice]);
 
   const pauseGame = useCallback(() => {
     const game = gameRef.current;
@@ -149,6 +188,11 @@ export default function App() {
             <div className="top-bar">
               <div className="stat">LEVEL <b>{floorLabel}</b></div>
               <div className="stat">TIME <b>{formatTime(time)}</b></div>
+              {isTouchDevice && (
+                <button type="button" className="pause-btn" onClick={pauseGame}>
+                  ⏸
+                </button>
+              )}
             </div>
           </div>
           <div className="progress-corner">
@@ -171,7 +215,23 @@ export default function App() {
               open the door to {doorPrompt.nextLabel}
             </div>
           )}
+
+          {isTouchDevice && !paused && (
+            <TouchControls
+              game={gameRef.current}
+              doorPrompt={doorPrompt}
+              crouchOn={crouchOn}
+              onCrouchChange={setCrouchOn}
+            />
+          )}
         </>
+      )}
+
+      {isTouchDevice && portrait && (
+        <div className="rotate-overlay">
+          <div className="rotate-icon" />
+          <div className="rotate-text">Rotate your device to play</div>
+        </div>
       )}
 
       {phase === 'playing' && paused && (
@@ -261,9 +321,16 @@ export default function App() {
               <span>{musicOn ? 'On' : 'Off'}</span>
             </div>
             <button onClick={startGame}>Strike the torch</button>
-            <div className="keys">
-              <b>W A S D</b> move &nbsp;&middot;&nbsp; <b>SPACE</b> jump &nbsp;&middot;&nbsp; <b>CTRL</b> crouch &nbsp;&middot;&nbsp; <b>E</b> open door &nbsp;&middot;&nbsp; <b>ESC</b> pause
-            </div>
+            {isTouchDevice ? (
+              <div className="keys">
+                <b>Left stick</b> move &nbsp;&middot;&nbsp; <b>drag</b> look &nbsp;&middot;&nbsp;{' '}
+                <b>JUMP / CROUCH</b> buttons &nbsp;&middot;&nbsp; <b>OPEN</b> door &nbsp;&middot;&nbsp; ⏸ pause
+              </div>
+            ) : (
+              <div className="keys">
+                <b>W A S D</b> move &nbsp;&middot;&nbsp; <b>SPACE</b> jump &nbsp;&middot;&nbsp; <b>CTRL</b> crouch &nbsp;&middot;&nbsp; <b>E</b> open door &nbsp;&middot;&nbsp; <b>ESC</b> pause
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -491,4 +491,150 @@ button:hover {
 }
 .keys b {
   color: rgba(232, 228, 218, 0.7);
-} 
+}
+
+/* ---------------------------------------------------------------- */
+/* Touch controls                                                    */
+/* ---------------------------------------------------------------- */
+
+.pause-btn {
+  pointer-events: auto;
+  padding: 6px 14px;
+  font-size: 16px;
+  line-height: 1;
+  border-color: rgba(217, 119, 63, 0.5);
+  background: var(--panel);
+}
+
+.touch-look-surface {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  touch-action: none;
+  /* deliberately transparent — this just captures drag gestures for
+     camera look, underneath the joystick/buttons which sit on top */
+}
+
+.touch-joystick-base {
+  position: fixed;
+  left: 26px;
+  bottom: 26px;
+  z-index: 6;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: rgba(232, 228, 218, 0.06);
+  border: 1px solid rgba(232, 228, 218, 0.25);
+  touch-action: none;
+}
+
+.touch-joystick-thumb {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  background: rgba(217, 119, 63, 0.35);
+  border: 1px solid rgba(217, 119, 63, 0.7);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.touch-action-buttons {
+  position: fixed;
+  right: 22px;
+  bottom: 26px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 14px;
+}
+
+.touch-btn {
+  touch-action: none;
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  padding: 0;
+  background: rgba(232, 228, 218, 0.06);
+  color: rgba(232, 228, 218, 0.75);
+  border: 1px solid rgba(232, 228, 218, 0.3);
+}
+
+.touch-btn:active,
+.touch-btn.active {
+  background: var(--ember);
+  color: #0a0a0a;
+  border-color: var(--ember);
+}
+
+.touch-btn-jump {
+  width: 84px;
+  height: 84px;
+}
+
+.touch-btn-interact {
+  border-color: var(--ember);
+  color: var(--ember);
+}
+
+.rotate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: #050506;
+  color: var(--ash);
+}
+
+.rotate-icon {
+  width: 54px;
+  height: 34px;
+  border: 2px solid var(--ember);
+  border-radius: 6px;
+  animation: rotate-icon-spin 1.6s ease-in-out infinite;
+}
+
+@keyframes rotate-icon-spin {
+  0%, 15% { transform: rotate(0deg); }
+  50%, 65% { transform: rotate(90deg); }
+  100% { transform: rotate(90deg); }
+}
+
+.rotate-text {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(232, 228, 218, 0.7);
+}
+
+@media (max-width: 480px) {
+  .touch-joystick-base {
+    width: 116px;
+    height: 116px;
+    left: 18px;
+    bottom: 18px;
+  }
+  .touch-action-buttons {
+    right: 16px;
+    bottom: 18px;
+    gap: 10px;
+  }
+  .touch-btn {
+    width: 66px;
+    height: 66px;
+  }
+  .touch-btn-jump {
+    width: 72px;
+    height: 72px;
+  }
+}
