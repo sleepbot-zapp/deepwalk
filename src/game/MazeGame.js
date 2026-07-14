@@ -644,8 +644,9 @@ export class MazeGame {
   // dx/dy are raw touch-movement pixel deltas, applied with the same
   // sensitivity constant the mouse path uses.
   lookDelta(dx, dy) {
-    this.yaw -= dx * 0.0026;
-    this.pitch -= dy * 0.0026;
+    const TOUCH_LOOK_SENS = 0.0026 * 1.75;
+    this.yaw -= dx * TOUCH_LOOK_SENS;
+    this.pitch -= dy * TOUCH_LOOK_SENS;
     this.pitch = Math.max(-1.2, Math.min(1.2, this.pitch));
   }
 
