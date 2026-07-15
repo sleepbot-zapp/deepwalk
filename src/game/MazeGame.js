@@ -36,12 +36,30 @@ const HURDLE_DEPTH = 0.3;
 
 const CRAWL_OPENING_HEIGHT = 1.25;
 const CRAWL_OPENING_WIDTH = CELL * 0.55;
-const TORCH_DOWN_TILT = 0.36;
+// Was 0.36 — the beam aimed noticeably below the camera's actual look
+// direction, so you had to tilt your view up toward the ceiling just to
+// get the torch pointed level. The torch should aim exactly where you're
+// looking, so there's no offset anymore.
+const TORCH_DOWN_TILT = 0;
 const TORCH_HEIGHT_OFFSET = 0.3;
-const TORCH_ANGLE = Math.PI / 10;
+const TORCH_ANGLE = Math.PI / 8;
 const TORCH_THROW = 6;
 const TORCH_GLOW_RADIUS = 6.5;
 const PROGRESS_FOLLOW_RATE = 0.35;
+
+// First-person hand/torch viewmodel. Rendered in its own scene+camera pass
+// on top of the world (depth buffer cleared between passes) so it never
+// clips into walls no matter how close the player gets to geometry.
+const VIEWMODEL_FOV = 52;
+const VIEWMODEL_POS = { x: 0.34, y: -0.4, z: -0.5 };
+const VIEWMODEL_ROT = { x: -0.08, y: -0.42, z: 0.16 };
+const VIEWMODEL_WALK_BOB_SPEED = 9.2;
+const VIEWMODEL_WALK_BOB_AMOUNT = 0.022;
+const VIEWMODEL_WALK_SWAY_AMOUNT = 0.014;
+const VIEWMODEL_IDLE_SPEED = 1.3;
+const VIEWMODEL_IDLE_AMOUNT = 0.008;
+const VIEWMODEL_LOOK_SWAY = 0.05;
+const VIEWMODEL_EASE_RATE = 10;
 const EXIT_LETTERS = 'ABCDEFGH';
 
 const DOOR_WIDTH = 1.6;
@@ -283,6 +301,172 @@ function makeDustCanvas() {
   return c;
 }
 
+// --- Flashlight/hand viewmodel textures -----------------------------------
+// U wraps around a cylinder's circumference, V runs along its length, so
+// these are drawn wide (U) and tall (V) with wrapS repeating so the seam
+// isn't visible from any angle.
+
+function makeBrushedMetalCanvas(base = [46, 47, 51], highlight = [235, 238, 245]) {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = `rgb(${base.join(',')})`;
+  ctx.fillRect(0, 0, 128, 256);
+
+  // Fine vertical brushing (streaks running the length of the barrel).
+  for (let x = 0; x < 128; x++) {
+    const shade = (Math.random() - 0.5) * 22;
+    const g = Math.max(0, Math.min(255, base[0] + shade));
+    ctx.strokeStyle = `rgba(${g},${g + 1},${g + 3},${0.12 + Math.random() * 0.18})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const jitter = (Math.random() - 0.5) * 6;
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + jitter, 256);
+    ctx.stroke();
+  }
+
+  // A soft rolling specular highlight band, like light catching the curve
+  // of a cylindrical barrel.
+  const spec = ctx.createLinearGradient(0, 0, 128, 0);
+  spec.addColorStop(0, 'rgba(255,255,255,0)');
+  spec.addColorStop(0.28, `rgba(${highlight.join(',')},0.22)`);
+  spec.addColorStop(0.38, `rgba(${highlight.join(',')},0.4)`);
+  spec.addColorStop(0.48, 'rgba(255,255,255,0)');
+  spec.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = spec;
+  ctx.fillRect(0, 0, 128, 256);
+
+  // A couple of subtle machined seam rings.
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(0, 40, 128, 3);
+  ctx.fillRect(0, 210, 128, 3);
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(0, 38, 128, 1);
+  ctx.fillRect(0, 208, 128, 1);
+
+  return c;
+}
+
+function makeGripCanvas() {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#232326';
+  ctx.fillRect(0, 0, 128, 256);
+
+  // Diamond-knurl pattern: two sets of diagonal ridges crossing each other,
+  // the classic machined-grip look on a flashlight or torch handle.
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.lineWidth = 2;
+  const step = 12;
+  for (let offset = -256; offset < 256; offset += step) {
+    ctx.beginPath();
+    ctx.moveTo(offset, 0);
+    ctx.lineTo(offset + 256, 256);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(offset, 256);
+    ctx.lineTo(offset + 256, 0);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let offset = -256 + 4; offset < 256; offset += step) {
+    ctx.beginPath();
+    ctx.moveTo(offset, 0);
+    ctx.lineTo(offset + 256, 256);
+    ctx.stroke();
+  }
+  return c;
+}
+
+function makeGripBumpCanvas() {
+  // Grayscale companion to makeGripCanvas for a bumpMap — lighter = raised.
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#555555';
+  ctx.fillRect(0, 0, 128, 256);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 3;
+  const step = 12;
+  for (let offset = -256; offset < 256; offset += step) {
+    ctx.beginPath();
+    ctx.moveTo(offset, 0);
+    ctx.lineTo(offset + 256, 256);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(offset, 256);
+    ctx.lineTo(offset + 256, 0);
+    ctx.stroke();
+  }
+  return c;
+}
+
+function makeFabricCanvas(base = [26, 130, 124]) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = `rgb(${base.join(',')})`;
+  ctx.fillRect(0, 0, 128, 128);
+  // Diagonal knit weave — short crossed strokes for a woven-fabric feel.
+  for (let i = 0; i < 900; i++) {
+    const shade = (Math.random() - 0.5) * 26;
+    const g = [base[0] + shade, base[1] + shade, base[2] + shade];
+    ctx.strokeStyle = `rgba(${g[0]},${g[1]},${g[2]},${0.18 + Math.random() * 0.2})`;
+    ctx.lineWidth = 1;
+    const x = Math.random() * 128,
+      y = Math.random() * 128;
+    const len = 3 + Math.random() * 3;
+    const ang = (Math.random() > 0.5 ? 0.7 : -0.7) + (Math.random() - 0.5) * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+    ctx.stroke();
+  }
+  return c;
+}
+
+function makeLensCanvas() {
+  // A parabolic-reflector look: bright hot filament center, concentric
+  // faceted rings falling off toward a warm amber rim.
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const cx = 64,
+    cy = 64;
+  ctx.fillStyle = '#3a2410';
+  ctx.fillRect(0, 0, 128, 128);
+
+  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 62);
+  glow.addColorStop(0, 'rgba(255,247,225,1)');
+  glow.addColorStop(0.18, 'rgba(255,220,160,1)');
+  glow.addColorStop(0.5, 'rgba(255,176,96,0.9)');
+  glow.addColorStop(0.85, 'rgba(190,100,40,0.55)');
+  glow.addColorStop(1, 'rgba(120,60,20,0.2)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 62, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Faceted reflector rings.
+  ctx.globalCompositeOperation = 'overlay';
+  for (let r = 8; r < 60; r += 6) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  return c;
+}
+
 function makeRampGeometry(size, ownY, neighborY, dir) {
   const lowY = Math.min(ownY, neighborY) - 0.5; 
   let nwY, neY, swY, seY;
@@ -413,10 +597,11 @@ export class MazeGame {
 
     this.scene.add(new THREE.HemisphereLight(0x2a2d35, 0x0a0a0c, 0.15));
     
-    this.torch = new THREE.SpotLight(0xffc27a, 250, 35, TORCH_ANGLE, 0.8, 1.5);
+    this.torch = new THREE.SpotLight(0xffc27a, 250, 35, TORCH_ANGLE, 0.3, 1.4);
     this.torch.castShadow = true;
     this.torch.shadow.mapSize.set(1024, 1024);
-    this.torch.shadow.bias = -0.002;
+    this.torch.shadow.bias = -0.0008;
+    this.torch.shadow.normalBias = 0.03;
 
     this.scene.add(this.torch);
     this.torchTarget = new THREE.Object3D();
@@ -432,15 +617,223 @@ export class MazeGame {
     this.camera.add(this.fillLight);
     this.fillLight.position.set(0, -0.1, 0.3);
     this.scene.add(this.camera);
-    
+
+    // Two-pass rendering: the world renders normally, then we clear only
+    // the depth buffer and render the hand/torch viewmodel on top so it
+    // always draws in front of maze geometry.
+    this.renderer.autoClear = false;
+    this._buildHandModel(w, h);
+
     this._onResize = () => {
       const clientWidth = this.container.clientWidth || window.innerWidth || 1;
       const clientHeight = this.container.clientHeight || window.innerHeight || 1;
       this.camera.aspect = clientWidth / clientHeight;
       this.camera.updateProjectionMatrix();
+      if (this.viewCamera) {
+        this.viewCamera.aspect = clientWidth / clientHeight;
+        this.viewCamera.updateProjectionMatrix();
+      }
       this.renderer.setSize(clientWidth, clientHeight);
     };
     window.addEventListener('resize', this._onResize);
+  }
+
+  // Builds a stylized first-person hand holding a torch/flashlight, similar
+  // in spirit to the block-game reference: a sleeve, a hand gripping a
+  // metal flashlight body, and a glowing lens at the tip. Everything is
+  // built from primitives so there are no external model assets to load.
+  _buildHandModel(w, h) {
+    this.viewmodelScene = new THREE.Scene();
+    this.viewCamera = new THREE.PerspectiveCamera(VIEWMODEL_FOV, w / h, 0.01, 10);
+    this.viewmodelScene.add(this.viewCamera);
+
+    // The viewmodel scene has no access to the world's lights, so give it
+    // its own small rig: soft ambient fill plus a warm point light near
+    // the lens standing in for the torch bulb glow on the hand/sleeve.
+    this.viewmodelScene.add(new THREE.AmbientLight(0x554433, 0.55));
+    const rig = new THREE.PointLight(0xffceA0, 1.6, 3, 2);
+    rig.position.set(0.1, 0.15, 0.3);
+    this.viewCamera.add(rig);
+    const rimLight = new THREE.DirectionalLight(0x8899ff, 0.25);
+    rimLight.position.set(-1, 1, 1);
+    this.viewCamera.add(rimLight);
+
+    this.handGroup = new THREE.Group();
+    this.handGroup.position.set(VIEWMODEL_POS.x, VIEWMODEL_POS.y, VIEWMODEL_POS.z);
+    this.handGroup.rotation.set(VIEWMODEL_ROT.x, VIEWMODEL_ROT.y, VIEWMODEL_ROT.z);
+    this.viewCamera.add(this.handGroup);
+
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xdb9a67, roughness: 0.85, metalness: 0.02 });
+
+    const sleeveTex = new THREE.CanvasTexture(makeFabricCanvas([26, 130, 124]));
+    sleeveTex.wrapS = sleeveTex.wrapT = THREE.RepeatWrapping;
+    sleeveTex.repeat.set(2, 2);
+    sleeveTex.colorSpace = THREE.SRGBColorSpace;
+    const sleeveMat = new THREE.MeshStandardMaterial({ map: sleeveTex, roughness: 0.85, metalness: 0.02 });
+
+    const cuffTex = new THREE.CanvasTexture(makeFabricCanvas([18, 88, 84]));
+    cuffTex.wrapS = cuffTex.wrapT = THREE.RepeatWrapping;
+    cuffTex.repeat.set(2, 1);
+    cuffTex.colorSpace = THREE.SRGBColorSpace;
+    const cuffMat = new THREE.MeshStandardMaterial({ map: cuffTex, roughness: 0.85, metalness: 0.02 });
+
+    const bodyMetalCanvas = makeBrushedMetalCanvas([46, 47, 51]);
+    const bodyMetalTex = new THREE.CanvasTexture(bodyMetalCanvas);
+    bodyMetalTex.wrapS = THREE.RepeatWrapping;
+    bodyMetalTex.colorSpace = THREE.SRGBColorSpace;
+    const bodyMetalMat = new THREE.MeshStandardMaterial({
+      map: bodyMetalTex,
+      roughness: 0.4,
+      metalness: 0.85,
+    });
+
+    const headMetalCanvas = makeBrushedMetalCanvas([24, 24, 27]);
+    const headMetalTex = new THREE.CanvasTexture(headMetalCanvas);
+    headMetalTex.wrapS = THREE.RepeatWrapping;
+    headMetalTex.colorSpace = THREE.SRGBColorSpace;
+    const headMetalMat = new THREE.MeshStandardMaterial({
+      map: headMetalTex,
+      roughness: 0.35,
+      metalness: 0.85,
+    });
+
+    const gripTex = new THREE.CanvasTexture(makeGripCanvas());
+    gripTex.wrapS = THREE.RepeatWrapping;
+    gripTex.colorSpace = THREE.SRGBColorSpace;
+    const gripBumpTex = new THREE.CanvasTexture(makeGripBumpCanvas());
+    gripBumpTex.wrapS = THREE.RepeatWrapping;
+    const gripMat = new THREE.MeshStandardMaterial({
+      map: gripTex,
+      bumpMap: gripBumpTex,
+      bumpScale: 0.008,
+      roughness: 0.95,
+      metalness: 0.1,
+    });
+    const switchMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.9, metalness: 0.15 });
+
+    const lensTex = new THREE.CanvasTexture(makeLensCanvas());
+    lensTex.colorSpace = THREE.SRGBColorSpace;
+    this._lensMat = new THREE.MeshStandardMaterial({
+      map: lensTex,
+      emissiveMap: lensTex,
+      emissive: 0xffb060,
+      emissiveIntensity: 1.4,
+      roughness: 0.25,
+      metalness: 0.1,
+    });
+
+    // Forearm / sleeve, angled back toward the bottom-right of the screen.
+    const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.55, 0.26), sleeveMat);
+    sleeve.position.set(0, -0.32, 0.28);
+    sleeve.rotation.x = 0.3;
+    this.handGroup.add(sleeve);
+
+    const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.07, 0.28), cuffMat);
+    cuff.position.set(0, -0.1, 0.2);
+    cuff.rotation.x = 0.3;
+    this.handGroup.add(cuff);
+
+    // Fingers wrap the right side of the flashlight body in a vertical
+    // column, curling in toward the barrel — a bracket-style wrap (top,
+    // bottom, and right side covered) rather than reaching over the top,
+    // so the left face of the grip stays exposed.
+    // Slightly different lengths (index/middle longest, pinky shortest)
+    // and a real gap between each box (0.058 step vs 0.026 height, so a
+    // ~0.032 shadowed gap) so these read as four fingers, not one slab.
+    const fingerLengths = [0.13, 0.15, 0.14, 0.1];
+    const fingers = [];
+    for (let i = 0; i < 4; i++) {
+      const finger = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.026, fingerLengths[i]), skinMat);
+      finger.position.set(0.1, 0.145 - i * 0.058, -0.06);
+      finger.rotation.y = -0.35;
+      this.handGroup.add(finger);
+      fingers.push(finger);
+    }
+    // Flashlight: rubber grip -> metal body -> flared head -> glowing lens,
+    // extending forward (down the local -Z axis) out of the fist.
+    const torchGroup = new THREE.Group();
+    torchGroup.position.set(0, 0.06, -0.05);
+    torchGroup.rotation.x = -Math.PI / 2 + 0.05;
+    this.handGroup.add(torchGroup);
+
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.22, 12), gripMat);
+    grip.position.z = 0.11;
+    torchGroup.add(grip);
+
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.052, 0.3, 12), bodyMetalMat);
+    body.position.z = -0.13;
+    torchGroup.add(body);
+
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.055, 0.14, 12), headMetalMat);
+    head.position.z = -0.35;
+    torchGroup.add(head);
+
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.012, 16), this._lensMat);
+    lens.position.z = -0.42;
+    torchGroup.add(lens);
+
+    // Small thumb switch on the body for a bit of readable detail.
+    const switchBtn = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.05), switchMat);
+    switchBtn.position.set(0.05, 0, -0.02);
+    torchGroup.add(switchBtn);
+
+    this._handMeshes = [sleeve, cuff, ...fingers, grip, body, head, lens, switchBtn];
+    this._handBobPhase = 0;
+    this._handLastYaw = this.yaw;
+    this._handLastPitch = this.pitch;
+    this._handSwayX = 0;
+    this._handSwayY = 0;
+  }
+
+  // Advances the hand/torch viewmodel each frame: keeps the viewmodel
+  // camera locked to the player's look direction, adds a walking bob and a
+  // small mouse-look sway, and lets the lens glow track the torch's own
+  // battery-driven flicker so the two stay visually in sync.
+  _updateHandModel(dt) {
+    if (!this.viewCamera) return;
+    this.viewCamera.quaternion.copy(this.camera.quaternion);
+    this.viewCamera.position.copy(this.camera.position);
+
+    const moving = this.currentPlayerSpeed > 0.01 && this.grounded;
+    if (moving) {
+      this._handBobPhase += dt * VIEWMODEL_WALK_BOB_SPEED;
+    } else {
+      this._handBobPhase += dt * VIEWMODEL_IDLE_SPEED;
+    }
+    const bobAmt = moving ? VIEWMODEL_WALK_BOB_AMOUNT : VIEWMODEL_IDLE_AMOUNT;
+    const swayAmt = moving ? VIEWMODEL_WALK_SWAY_AMOUNT : VIEWMODEL_IDLE_AMOUNT * 0.6;
+    const bobY = Math.sin(this._handBobPhase) * bobAmt;
+    const bobX = Math.cos(this._handBobPhase * 0.5) * swayAmt;
+
+    // Mouse-look sway: the hand lags slightly behind fast look movement,
+    // like it has a bit of weight to it.
+    let yawDelta = this.yaw - this._handLastYaw;
+    yawDelta = ((yawDelta + Math.PI) % (Math.PI * 2)) - Math.PI;
+    const pitchDelta = this.pitch - this._handLastPitch;
+    this._handLastYaw = this.yaw;
+    this._handLastPitch = this.pitch;
+    const t = 1 - Math.exp(-dt * VIEWMODEL_EASE_RATE);
+    this._handSwayX += (-yawDelta * VIEWMODEL_LOOK_SWAY * 20 - this._handSwayX) * t;
+    this._handSwayY += (pitchDelta * VIEWMODEL_LOOK_SWAY * 20 - this._handSwayY) * t;
+
+    this.handGroup.position.set(
+      VIEWMODEL_POS.x + bobX + this._handSwayX * 0.02,
+      VIEWMODEL_POS.y + bobY + this._handSwayY * 0.02,
+      VIEWMODEL_POS.z
+    );
+    this.handGroup.rotation.set(
+      VIEWMODEL_ROT.x + this._handSwayY * 0.15,
+      VIEWMODEL_ROT.y + this._handSwayX * 0.15,
+      VIEWMODEL_ROT.z - this._handSwayX * 0.1
+    );
+
+    // Reuse the world torch's current intensity (already includes the
+    // low-battery flicker) to drive the lens glow so both read as the
+    // same light source.
+    if (this._lensMat && this.torch) {
+      const norm = THREE.MathUtils.clamp(this.torch.intensity / 250, 0.15, 1);
+      this._lensMat.emissiveIntensity = 0.6 + norm * 1.2;
+    }
   }
 
   _buildAtmosphere() {
@@ -1909,8 +2302,14 @@ export class MazeGame {
     this.camera.position.set(this.player.x, this.player.y, this.player.z);
     this._updateTorch(dt);
     this._updateAtmosphere(dt);
+    this._updateHandModel(dt);
 
+    this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
+    if (this.viewCamera) {
+      this.renderer.clearDepth();
+      this.renderer.render(this.viewmodelScene, this.viewCamera);
+    }
   }
 
   dispose() {
@@ -1937,6 +2336,18 @@ export class MazeGame {
       this._dustPoints.material.dispose();
     }
     if (this._dustTex) this._dustTex.dispose();
+    if (this._handMeshes) {
+      this._handMeshes.forEach((m) => {
+        m.geometry.dispose();
+        const mat = m.material;
+        if (mat) {
+          if (mat.map) mat.map.dispose();
+          if (mat.bumpMap) mat.bumpMap.dispose();
+          if (mat.emissiveMap) mat.emissiveMap.dispose();
+          mat.dispose();
+        }
+      });
+    }
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode) {
       this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
