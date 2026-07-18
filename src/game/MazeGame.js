@@ -1987,6 +1987,9 @@ export class MazeGame {
       map: tex,
       roughness: 0.7,
       metalness: 0.05,
+      emissive: 0xffffff,
+      emissiveMap: tex,
+      emissiveIntensity: 0.35,
     });
     const sizeH = 0.85 + rng() * 0.55;
     const sizeW = sizeH * (200 / 256);
@@ -2885,13 +2888,8 @@ export class MazeGame {
     this.currentEyeHeight += (target - this.currentEyeHeight) * t;
   }
   _updateBattery(dt) {
-    this.batteryLevel = Math.max(0, this.batteryLevel - dt * 0.004);
-    let intensity = 250;
-    if (this.batteryLevel < 0.25) {
-      intensity *= (0.55 + 0.45 * Math.sin(this.elapsed * 30)) * (0.5 + this.batteryLevel * 2);
-    }
-    this.torch.intensity = intensity;
-    this.torchGlow.intensity = (intensity / 100) * 14;
+    this.torch.intensity = 250;
+    this.torchGlow.intensity = (250 / 100) * 14;
     if (this.callbacks.onBatteryChange) this.callbacks.onBatteryChange(this.batteryLevel);
   }
   _updateTorch(dt) {
