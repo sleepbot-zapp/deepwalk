@@ -54,8 +54,6 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     game?.clearJoystick();
   }, [game]);
 
-  
-
   const onLookDown = useCallback((e) => {
     if (lookPointerId.current !== null) return;
     lookPointerId.current = e.pointerId;
@@ -78,9 +76,6 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     if (lookPointerId.current !== e.pointerId) return;
     lookPointerId.current = null;
   }, []);
-
-  
-
   const onJumpDown = useCallback(
     (e) => {
       e.preventDefault();

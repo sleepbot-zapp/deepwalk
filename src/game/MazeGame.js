@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   generateMaze,
   sizeForLevel,
+  roomDensityForLevel,
   bfsDistances,
   generateSurfaceMap,
   hashSeed,
@@ -12,6 +13,8 @@ import {
   assignElevations,
   assignObstacles,
   assignDoors,
+  clearHurdlesNearExits,
+  clearHurdlesNearAllDoors,
   assignRooms,
   pickMazeShift,
 } from './maze.js';
@@ -86,9 +89,6 @@ const DOOR_LOOK_DIST = 3.2;
 const DOOR_AUTO_CLOSE_DELAY = 6.5;
 const DOOR_LEAVE_DIST = 3.6;
 const DOOR_ENTER_RADIUS = 1.1;
-// Shortcut/room doors: real, human-sized doors (not the full cell-wide exit
-// portals above) cut into walls purely as optional shortcuts. Opened/closed
-// by left click from either side.
 const SHORTCUT_DOOR_WIDTH = 0.98;
 const SHORTCUT_DOOR_HEIGHT = 2.05;
 const SHORTCUT_DOOR_THICKNESS = 0.06;
@@ -97,10 +97,7 @@ const SHORTCUT_DOOR_OPEN_DURATION = 0.6;
 const SHORTCUT_DOOR_CLOSE_DURATION = 0.45;
 const SHORTCUT_DOOR_INTERACT_DIST = 2.4;
 const SHORTCUT_DOOR_LOOK_DIST = 3.0;
-const SHORTCUT_DOOR_SEAL = 0.035; // leaf overlaps the wall opening by this much on all
-// sides so there's no coplanar seam between the door leaf and the wall's cut edge
-// (a from-scratch match would leave a hairline gap that flickers in and out at
-// grazing view angles).
+const SHORTCUT_DOOR_SEAL = 0.035; 
 const ENTRANCE_YAW_FOR_WALL = {
   n: Math.PI,
   s: 0,
@@ -1486,6 +1483,7 @@ export class MazeGame {
     };
     this.wallMeshes = [];
     this.floorMeshes = [];
+    this.hurdleMeshes = [];
     this._wallMeshByEdge = new Map();
     this._wallAnims = [];
     this._wallDebrisBursts = [];
@@ -1981,6 +1979,7 @@ export class MazeGame {
   _clearMazeMeshes() {
     for (const m of this.wallMeshes) this.scene.remove(m);
     this.wallMeshes = [];
+    this.hurdleMeshes = [];
     this._wallMeshByEdge.clear();
     this._wallAnims = [];
     if (this._wallDebrisBursts) {
@@ -2076,6 +2075,31 @@ export class MazeGame {
     }
     this.floorMeshes = [];
     this._buildFloor(this.mazeW, this.mazeH);
+  }
+  _rebuildHurdles() {
+    for (const m of this.hurdleMeshes) {
+      this.scene.remove(m);
+      if (m.geometry) m.geometry.dispose();
+      const idx = this.wallMeshes.indexOf(m);
+      if (idx >= 0) this.wallMeshes.splice(idx, 1);
+    }
+    this.hurdleMeshes = [];
+    const originX = -(this.mazeW * CELL) / 2;
+    const originZ = -(this.mazeH * CELL) / 2;
+    const hurdleMat = this._hurdleMat;
+    for (let y = 0; y < this.mazeH; y++) {
+      for (let x = 0; x < this.mazeW; x++) {
+        const cell = this.maze[y][x];
+        if (!cell.hurdleDir) continue;
+        const cx = originX + x * CELL + CELL / 2;
+        const cz = originZ + y * CELL + CELL / 2;
+        const floorY = (cell.elevation || 0) * STEP_HEIGHT;
+        const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, hurdleMat);
+        this.scene.add(m);
+        this.wallMeshes.push(m);
+        this.hurdleMeshes.push(m);
+      }
+    }
   }
   _buildFloor(w, h) {
     const FLOOR_THICKNESS = 4.0;
@@ -2330,11 +2354,14 @@ export class MazeGame {
     this._paintingCap = Math.round(
       PAINTING_MAX_PER_MAZE_BASE + w * h * PAINTING_MAX_PER_MAZE_PER_CELL,
     );
-    const hurdleMat = new THREE.MeshStandardMaterial({
-      color: 0x3a3428,
-      roughness: 0.85,
-      metalness: 0.05,
-    });
+    const hurdleMat =
+      this._hurdleMat ||
+      new THREE.MeshStandardMaterial({
+        color: 0x3a3428,
+        roughness: 0.85,
+        metalness: 0.05,
+      });
+    this._hurdleMat = hurdleMat;
     const ceilMat = new THREE.MeshStandardMaterial({
       color: 0x050506,
       roughness: 1,
@@ -2459,6 +2486,7 @@ export class MazeGame {
           const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, hurdleMat);
           this.scene.add(m);
           this.wallMeshes.push(m);
+          this.hurdleMeshes.push(m);
         }
       }
     }
@@ -2693,19 +2721,23 @@ export class MazeGame {
     this.mazeW = w;
     this.mazeH = h;
     this.rng = createRng(levelSeed(this.baseSeed, n));
+    const density = roomDensityForLevel(n);
     this.maze = generateMaze(w, h, this.rng);
     assignElevations(this.maze, w, h, 0, 0, this.rng);
     assignObstacles(this.maze, w, h, 0, 0, this.rng);
-    assignDoors(this.maze, w, h, this.rng);
+    assignDoors(this.maze, w, h, this.rng, { density });
     this.surfaceMap = generateSurfaceMap(w, h, this.rng);
     const exitCells = pickExits(this.maze, w, h, 0, 0, this.rng);
     this.exits = exitCells.map((e, i) => ({
       ...e,
       letter: EXIT_LETTERS[i] || String(i + 1),
     }));
+    clearHurdlesNearExits(this.maze, w, h, this.exits);
     assignRooms(this.maze, w, h, this.rng, {
       avoidCells: [[0, 0], ...this.exits.map((e) => [e.x, e.y])],
+      density,
     });
+    clearHurdlesNearAllDoors(this.maze, w, h);
     this._roomCells = [];
     for (let ry = 0; ry < h; ry++) {
       for (let rx = 0; rx < w; rx++) {
@@ -3240,12 +3272,6 @@ export class MazeGame {
     }
     this._shortcutDoorLookTarget = this.shortcutDoors.find((d) => d.leaf === hits[0].object) || null;
   }
-  // Toggled from left click (or E) from either side - a closed door opens,
-  // an open door closes, and clicking mid-swing simply reverses it. The
-  // swing direction is decided fresh each time a door starts opening, based
-  // on which side of the wall the player is standing on, so the leaf always
-  // swings away from whoever opened it instead of always opening into one
-  // fixed room.
   _toggleShortcutDoor(door) {
     if (!door) return;
     const dist = Math.hypot(this.player.x - door.worldX, this.player.z - door.worldZ);
@@ -3280,6 +3306,8 @@ export class MazeGame {
     if (!exit || exit.doorState !== 'closed') return;
     const dist = Math.hypot(this.player.x - exit.worldX, this.player.z - exit.worldZ);
     if (dist > DOOR_INTERACT_DIST) return;
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
+    if (cx !== exit.x || cy !== exit.y) return;
     exit.doorState = 'opening';
     this._playDoorCreak(false);
     if (this._doorLookTarget === exit) this._setDoorLook(null);
@@ -3297,7 +3325,9 @@ export class MazeGame {
   _updateDoorCrossTracking(exit) {
     if (exit.doorState !== 'open') return false;
     const dist = Math.hypot(this.player.x - exit.worldX, this.player.z - exit.worldZ);
-    return dist < DOOR_ENTER_RADIUS;
+    if (dist >= DOOR_ENTER_RADIUS) return false;
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
+    return cx === exit.x && cy === exit.y;
   }
   _enterDoor(exit) {
     if (exit.doorState === 'entered') return;
@@ -3459,7 +3489,10 @@ export class MazeGame {
       const delay = i * WALL_SHIFT_STAGGER + rng() * WALL_SHIFT_STAGGER_JITTER;
       this.audio.playMazeShift(change.type, delay);
     });
-    if (changes.some((c) => c.flattened)) this._rebuildFloor();
+    if (changes.some((c) => c.flattened)) {
+      this._rebuildFloor();
+      this._rebuildHurdles();
+    }
     if (this.callbacks.onMazeShift) this.callbacks.onMazeShift(changes);
   }
   _wallEdgeTransform(x, y, dir) {

@@ -76,16 +76,19 @@ export function bfsDistances(grid, w, h, sx, sy) {
   const dist = Array.from({ length: h }, () => Array(w).fill(-1));
   dist[sy][sx] = 0;
   const q = [[sx, sy]];
+  
+  const passable = (cell, dir, dirUp) =>
+    !cell[dir] || cell['door' + dirUp] || cell['hatch' + dirUp];
 
   while (q.length) {
     const [x, y] = q.shift();
     const d = dist[y][x];
     const cell = grid[y][x];
     const neighbors = [];
-    if (!cell.n) neighbors.push([x, y - 1]);
-    if (!cell.s) neighbors.push([x, y + 1]);
-    if (!cell.e) neighbors.push([x + 1, y]);
-    if (!cell.w) neighbors.push([x - 1, y]);
+    if (passable(cell, 'n', 'N')) neighbors.push([x, y - 1]);
+    if (passable(cell, 's', 'S')) neighbors.push([x, y + 1]);
+    if (passable(cell, 'e', 'E')) neighbors.push([x + 1, y]);
+    if (passable(cell, 'w', 'W')) neighbors.push([x - 1, y]);
     for (const [nx, ny] of neighbors) {
       if (dist[ny][nx] === -1) {
         dist[ny][nx] = d + 1;
@@ -236,27 +239,12 @@ export function assignObstacles(grid, w, h, sx, sy, rng, opts = {}) {
   }
 }
 
-// Doors/hatches are never cut into the corridors the generator actually
-// carved out - those stay exactly as the "real" maze intends, no door on
-// them at all. Instead this looks for solid walls (and solid walls that
-// already have a small crawl-hole cut into them) between two same-elevation
-// cells and, on a subset of those, adds a proper door-sized opening. Since
-// the maze's own wall flag is left untouched, these read purely as optional
-// shortcuts/room-style connections layered on top of the maze - they never
-// change what "the maze" is, only what a player can additionally do with a
-// door. Same-elevation is enforced for both regular doors and hatches
-// through wall-holes, since needing to jump/climb through a doorway is
-// exactly the complexity we want to avoid. Ramp cells are excluded too,
-// even when their stored elevation matches the neighbor's: a ramp cell's
-// floor slopes across the cell, so a wall running parallel to that slope
-// isn't flat along its width even though both endpoints report the same
-// elevation number - cutting a door/crawl-hole there leaves the flat
-// opening misaligned with the sloped floor beneath it.
 export function assignDoors(grid, w, h, rng, opts = {}) {
   const doorChance = opts.doorChance ?? 0.6;
   const hatchChance = opts.hatchChance ?? 0.5;
   const minShortcutDistance = opts.minShortcutDistance ?? 6;
-  const maxShortcuts = opts.maxShortcuts ?? Math.max(1, Math.round((w * h) / 55));
+  const density = opts.density ?? 1;
+  const maxShortcuts = opts.maxShortcuts ?? Math.max(1, Math.round(((w * h) / 90) * density));
   const openDoorChance = opts.openDoorChance ?? 0.3;
 
   for (let y = 0; y < h; y++) {
@@ -282,9 +270,6 @@ export function assignDoors(grid, w, h, rng, opts = {}) {
     { dir: 's', opp: 'n', dx: 0, dy: 1 },
   ];
 
-  // Hatches: a crawl-hole already breaks through an otherwise-solid wall, so
-  // it's already off the main route - every one of those is fair game for a
-  // small hatch door.
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
@@ -304,12 +289,7 @@ export function assignDoors(grid, w, h, rng, opts = {}) {
       }
     }
   }
-
-  // Shortcut doors: pick a handful of solid walls (not crawl-holes, not the
-  // generator's own corridors) whose two sides are already reachable from
-  // one another the long way around, and cut a real door-sized opening
-  // through them. This is the "room/shortcut" layer - it links two branches
-  // of the maze without ever touching the maze's own connectivity.
+  
   const candidates = [];
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -319,11 +299,11 @@ export function assignDoors(grid, w, h, rng, opts = {}) {
         const ny = y + p.dy;
         if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
         const neighbor = grid[ny][nx];
-        if (!cell[p.dir]) continue; // open passage - that's the real maze route
+        if (!cell[p.dir]) continue; 
         if ((cell.elevation || 0) !== (neighbor.elevation || 0)) continue;
         if (cell.rampDir || neighbor.rampDir) continue;
         const dirUp = p.dir.toUpperCase();
-        if (cell['crawl' + dirUp]) continue; // already handled as a hatch above
+        if (cell['crawl' + dirUp]) continue; 
         if (cell.hurdleDir === p.dir || neighbor.hurdleDir === p.opp) continue;
         candidates.push({ x, y, nx, ny, dir: p.dir, opp: p.opp });
       }
@@ -359,20 +339,13 @@ export function assignDoors(grid, w, h, rng, opts = {}) {
   }
 }
 
-// Rooms: fixed clusters of cells merged into one open space (every internal
-// wall between cells in the cluster is cleared), with a handful of the
-// cluster's outer walls converted into doors the same way a regular
-// shortcut door is - everything else on the boundary stays a normal solid
-// wall. Same-elevation/no-ramp rules apply to room membership itself (every
-// cell in a room must share one flat elevation) and to which boundary walls
-// are allowed to become doors, for the same reason ramps are excluded from
-// ordinary doors above: a room's floor has to actually be flat.
 export function assignRooms(grid, w, h, rng, opts = {}) {
   const avoidCells = opts.avoidCells ?? [];
-  const minRooms = opts.minRooms ?? Math.max(2, Math.round((w * h) / 45));
-  const maxRooms = opts.maxRooms ?? Math.max(minRooms + 1, Math.round((w * h) / 16));
+  const density = opts.density ?? 1;
+  const minRooms = opts.minRooms ?? Math.max(1, Math.round(((w * h) / 70) * density));
+  const maxRooms = opts.maxRooms ?? Math.max(minRooms + 1, Math.round(((w * h) / 26) * density));
   const minDoors = opts.minDoors ?? 1;
-  const maxDoors = opts.maxDoors ?? 3;
+  const maxDoors = opts.maxDoors ?? (density < 0.7 ? 2 : 3);
   const openDoorChance = opts.openDoorChance ?? 0.3;
   const minCells = opts.minCells ?? 2;
   const maxRectCells = opts.maxRectCells ?? 9;
@@ -405,20 +378,11 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
     if (!cells || cells.length < minCells) continue;
 
     const { wallEdges, forcedDoorEdges } = collectRoomBoundaryEdges(grid, w, h, cells, elevation);
-    if (!wallEdges.length && !forcedDoorEdges.length) continue; // no possible connection at all - reject and try elsewhere
-
-    // Commit: claim the cells, open every wall between them, then punch
-    // 1..maxDoors of the boundary candidates.
+    if (!wallEdges.length && !forcedDoorEdges.length) continue; 
     const roomId = rooms.length;
     for (const [x, y] of cells) grid[y][x].roomId = roomId;
     openInteriorWalls(grid, w, h, cells);
-
-    // A room is never open on any side - only doored or solid. Any boundary
-    // edge where the maze's own corridor happened to run straight into the
-    // room has no wall behind it yet; that connection is load-bearing for
-    // the maze's connectivity, so it can't just be sealed shut. Give it a
-    // wall and turn it into a door instead, so the side is covered but the
-    // path still exists whenever the door is open.
+    
     for (const e of forcedDoorEdges) {
       setWall(grid, w, h, e.x, e.y, e.dir, true);
       const dirUp = e.dir.toUpperCase();
@@ -429,11 +393,7 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
       grid[e.y][e.x]['doorOpen' + dirUp] = startsOpen;
       grid[e.ny][e.nx]['doorOpen' + oppUp] = startsOpen;
     }
-
-    // The rest of the boundary is already solid wall on every side; pick a
-    // random subset of those (on top of whatever forced doors were just
-    // added) so the room ends up with somewhere between minDoors and
-    // maxDoors openings in total. Sides not picked stay plain solid walls.
+    
     for (let i = wallEdges.length - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1));
       [wallEdges[i], wallEdges[j]] = [wallEdges[j], wallEdges[i]];
@@ -456,7 +416,6 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
       grid[e.y][e.x]['doorOpen' + dirUp] = startsOpen;
       grid[e.ny][e.nx]['doorOpen' + oppUp] = startsOpen;
     }
-
     rooms.push({
       id: roomId,
       cells,
@@ -464,13 +423,12 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
       doors: forcedDoorEdges.length + extraDoorsNeeded,
     });
   }
-
   return rooms;
 }
 
 function collectRectRoom(grid, w, h, sx, sy, elevation, rng, avoidSet, maxCells) {
-  let rw = 2 + Math.floor(rng() * 3); // 2..4
-  let rh = 2 + Math.floor(rng() * 3); // 2..4
+  let rw = 2 + Math.floor(rng() * 3); 
+  let rh = 2 + Math.floor(rng() * 3); 
   while (rw * rh > maxCells) {
     if (rw >= rh && rw > 2) rw--;
     else if (rh > 2) rh--;
@@ -528,8 +486,8 @@ function collectBlobRoom(grid, w, h, sx, sy, elevation, rng, avoidSet, maxCells)
 
 function collectRoomBoundaryEdges(grid, w, h, cells, elevation) {
   const inRoom = new Set(cells.map(([x, y]) => y * 100000 + x));
-  const wallEdges = []; // already a solid wall - optional door candidate
-  const forcedDoorEdges = []; // was an open corridor - must become a door, never a bare gap
+  const wallEdges = []; 
+  const forcedDoorEdges = []; 
   for (const [x, y] of cells) {
     const cell = grid[y][x];
     for (const dir of ['n', 's', 'e', 'w']) {
@@ -539,14 +497,14 @@ function collectRoomBoundaryEdges(grid, w, h, cells, elevation) {
       if (!inBounds(nx, ny, w, h)) continue;
       if (inRoom.has(ny * 100000 + nx)) continue;
       const neighbor = grid[ny][nx];
-      // A real elevation difference (or a sloped ramp cell on the other
-      // side) can't have a flat wall or door butted against it - leave
-      // those alone entirely, same as ordinary doors do.
+      
+      
+      
       if ((neighbor.elevation || 0) !== elevation) continue;
       if (neighbor.rampDir) continue;
       const edge = { x, y, dir, nx, ny, opp: d.opp };
       if (cell[dir]) wallEdges.push(edge);
-      else forcedDoorEdges.push(edge); // real maze corridor - keep it passable, but only through a door
+      else forcedDoorEdges.push(edge); 
     }
   }
   return { wallEdges, forcedDoorEdges };
@@ -578,6 +536,11 @@ function openInteriorWalls(grid, w, h, cells) {
 export function sizeForLevel(level) {
   const size = Math.min(7 + level * 2, 25);
   return { w: size, h: size };
+}
+
+export function roomDensityForLevel(level) {
+  const lvl = Math.max(1, level || 1);
+  return Math.min(1.6, 0.35 + (lvl - 1) * 0.1);
 }
 
 function buildParentTree(grid, w, h, sx, sy) {
@@ -686,6 +649,44 @@ export function pickExits(grid, w, h, sx, sy, rng) {
   return selectDivergentCells(grid, w, h, sx, sy, rng, desired, 0.2);
 }
 
+const DIR_DELTAS = {
+  n: [0, -1],
+  s: [0, 1],
+  e: [1, 0],
+  w: [-1, 0],
+};
+const DIR_OPP = { n: 's', s: 'n', e: 'w', w: 'e' };
+
+function clearHurdleAtCell(grid, w, h, x, y) {
+  if (y < 0 || y >= h || x < 0 || x >= w) return;
+  const cell = grid[y][x];
+  cell.hurdleDir = null;
+  for (const dir of Object.keys(DIR_DELTAS)) {
+    const [dx, dy] = DIR_DELTAS[dir];
+    const nx = x + dx,
+      ny = y + dy;
+    if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+    const neighbor = grid[ny][nx];
+    if (neighbor.hurdleDir === DIR_OPP[dir]) neighbor.hurdleDir = null;
+  }
+}
+
+export function clearHurdlesNearExits(grid, w, h, exits) {
+  if (!exits || !exits.length) return;
+  for (const exit of exits) clearHurdleAtCell(grid, w, h, exit.x, exit.y);
+}
+
+export function clearHurdlesNearAllDoors(grid, w, h) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const cell = grid[y][x];
+      if (cell.doorN || cell.doorS || cell.doorE || cell.doorW) {
+        clearHurdleAtCell(grid, w, h, x, y);
+      }
+    }
+  }
+}
+
 export function pickAnchors(grid, w, h, exits, rng, count) {
   if (!exits || exits.length === 0) {
     return selectDivergentCells(grid, w, h, 0, 0, rng, count, 0.15);
@@ -787,7 +788,6 @@ function isBridgeEdge(grid, w, h, edge) {
   const targetKey = edge.ny * 100000 + edge.nx;
   const visited = new Set([startKey]);
   const queue = [[edge.x, edge.y]];
-
   while (queue.length) {
     const [x, y] = queue.shift();
     const cell = grid[y][x];
@@ -820,10 +820,6 @@ function shuffleInPlace(arr, rng) {
   return arr;
 }
 
-
-
-
-
 function collectPlateau(grid, w, h, sx, sy) {
   const startElevation = grid[sy][sx].elevation || 0;
   const key = (x, y) => y * 100000 + x;
@@ -835,32 +831,30 @@ function collectPlateau(grid, w, h, sx, sy) {
     const [x, y] = queue.shift();
     const cell = grid[y][x];
     for (const dir of ['n', 's', 'e', 'w']) {
-      if (cell[dir]) continue;
+      const dirUp = dir.toUpperCase();
+      const doored = !!(cell['door' + dirUp] || cell['hatch' + dirUp]);
+      if (cell[dir] && !doored) continue; 
       const d = SHIFT_DIRS[dir];
       const nx = x + d.dx;
       const ny = y + d.dy;
       if (!inBounds(nx, ny, w, h)) continue;
       const neighborElevation = grid[ny][nx].elevation || 0;
-      if (neighborElevation === startElevation) {
-        const k = key(nx, ny);
-        if (!visited.has(k)) {
-          visited.add(k);
-          cells.push([nx, ny]);
-          queue.push([nx, ny]);
+      if (!cell[dir]) {
+        if (neighborElevation === startElevation) {
+          const k = key(nx, ny);
+          if (!visited.has(k)) {
+            visited.add(k);
+            cells.push([nx, ny]);
+            queue.push([nx, ny]);
+          }
+          continue;
         }
-      } else {
-        boundary.push({ x, y, dir, nx, ny });
       }
+      boundary.push({ x, y, dir, nx, ny, doored });
     }
   }
   return { cells, boundary, elevation: startElevation };
 }
-
-
-
-
-
-
 
 function flattenPlateauIfSafe(grid, w, h, sx, sy, targetElevation, protectedSet) {
   const { cells, boundary, elevation } = collectPlateau(grid, w, h, sx, sy);
@@ -873,7 +867,12 @@ function flattenPlateauIfSafe(grid, w, h, sx, sy, targetElevation, protectedSet)
   if (delta === 0) return true;
   for (const edge of boundary) {
     const otherElevation = grid[edge.ny][edge.nx].elevation || 0;
-    if (Math.abs(otherElevation - targetElevation) > 1) return false;
+    const newDelta = otherElevation - targetElevation;
+    if (edge.doored) {
+      if (newDelta !== 0) return false;
+    } else if (Math.abs(newDelta) > 1) {
+      return false;
+    }
   }
   for (const [x, y] of cells) {
     grid[y][x].elevation = targetElevation;
@@ -887,7 +886,7 @@ function flattenPlateauIfSafe(grid, w, h, sx, sy, targetElevation, protectedSet)
     if (newDelta === 0) {
       if (cellHere.rampDir === edge.dir) cellHere.rampDir = null;
       if (cellThere.rampDir === oppDir) cellThere.rampDir = null;
-    } else if (cellHere.rampDir !== edge.dir && cellThere.rampDir !== oppDir) {
+    } else if (!edge.doored && cellHere.rampDir !== edge.dir && cellThere.rampDir !== oppDir) {
       cellHere.rampDir = edge.dir;
     }
   }
@@ -912,10 +911,6 @@ export function pickMazeShift(grid, w, h, opts = {}) {
     return Math.hypot(midX - near.x, midY - near.y);
   };
 
-  
-  
-  
-  
   const rankByProximity = (list) => {
     if (!near) return shuffleInPlace(list, rng);
     const close = [];
@@ -948,13 +943,6 @@ export function pickMazeShift(grid, w, h, opts = {}) {
     const elevThere = grid[edge.ny][edge.nx].elevation || 0;
     let flattened = false;
     if (elevHere !== elevThere) {
-      
-      
-      
-      
-      
-      
-      
       const sizeHere = collectPlateau(grid, w, h, edge.x, edge.y).cells.length;
       const sizeThere = collectPlateau(grid, w, h, edge.nx, edge.ny).cells.length;
       const ok =
