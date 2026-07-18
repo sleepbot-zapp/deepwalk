@@ -474,30 +474,154 @@ function shuffleInPlace(arr, rng) {
   return arr;
 }
 
+// Collects the connected "plateau" of cells reachable from (sx, sy) through
+// open edges that all share the same elevation, plus the boundary edges
+// where the elevation changes (ramps, or edges that are about to become
+// mismatched).
+function collectPlateau(grid, w, h, sx, sy) {
+  const startElevation = grid[sy][sx].elevation || 0;
+  const key = (x, y) => y * 100000 + x;
+  const visited = new Set([key(sx, sy)]);
+  const cells = [[sx, sy]];
+  const boundary = [];
+  const queue = [[sx, sy]];
+  while (queue.length) {
+    const [x, y] = queue.shift();
+    const cell = grid[y][x];
+    for (const dir of ['n', 's', 'e', 'w']) {
+      if (cell[dir]) continue;
+      const d = SHIFT_DIRS[dir];
+      const nx = x + d.dx;
+      const ny = y + d.dy;
+      if (!inBounds(nx, ny, w, h)) continue;
+      const neighborElevation = grid[ny][nx].elevation || 0;
+      if (neighborElevation === startElevation) {
+        const k = key(nx, ny);
+        if (!visited.has(k)) {
+          visited.add(k);
+          cells.push([nx, ny]);
+          queue.push([nx, ny]);
+        }
+      } else {
+        boundary.push({ x, y, dir, nx, ny });
+      }
+    }
+  }
+  return { cells, boundary, elevation: startElevation };
+}
+
+// Flattens the plateau containing (sx, sy) to targetElevation, keeping every
+// ramp on its border internally consistent (recomputed rather than left
+// stale). Refuses (and leaves the grid untouched) if that would require an
+// unsupported multi-level step at a border, or if the plateau contains any
+// protected cell (e.g. the player's current position) that shouldn't have
+// its floor height silently change underfoot.
+function flattenPlateauIfSafe(grid, w, h, sx, sy, targetElevation, protectedSet) {
+  const { cells, boundary, elevation } = collectPlateau(grid, w, h, sx, sy);
+  if (protectedSet) {
+    for (const [x, y] of cells) {
+      if (protectedSet.has(y * 100000 + x)) return false;
+    }
+  }
+  const delta = targetElevation - elevation;
+  if (delta === 0) return true;
+  for (const edge of boundary) {
+    const otherElevation = grid[edge.ny][edge.nx].elevation || 0;
+    if (Math.abs(otherElevation - targetElevation) > 1) return false;
+  }
+  for (const [x, y] of cells) {
+    grid[y][x].elevation = targetElevation;
+  }
+  for (const edge of boundary) {
+    const cellHere = grid[edge.y][edge.x];
+    const cellThere = grid[edge.ny][edge.nx];
+    const otherElevation = cellThere.elevation || 0;
+    const newDelta = otherElevation - targetElevation;
+    const oppDir = SHIFT_DIRS[edge.dir].opp;
+    if (newDelta === 0) {
+      if (cellHere.rampDir === edge.dir) cellHere.rampDir = null;
+      if (cellThere.rampDir === oppDir) cellThere.rampDir = null;
+    } else if (cellHere.rampDir !== edge.dir && cellThere.rampDir !== oppDir) {
+      cellHere.rampDir = edge.dir;
+    }
+  }
+  return true;
+}
+
 export function pickMazeShift(grid, w, h, opts = {}) {
   const rng = opts.rng ?? Math.random;
   const fallCount = opts.fallCount ?? 2;
   const riseCount = opts.riseCount ?? 2;
   const protectedCells = opts.protectedCells ?? [];
+  const near = opts.near ?? null;
+  const nearRadius = opts.nearRadius ?? 7;
 
   const protectedSet = new Set(protectedCells.map(([px, py]) => py * 100000 + px));
   const edges = listInteriorEdges(w, h);
 
-  const closedCandidates = shuffleInPlace(
+  const edgeDist = (e) => {
+    if (!near) return 0;
+    const midX = (e.x + e.nx) / 2 + 0.5;
+    const midY = (e.y + e.ny) / 2 + 0.5;
+    return Math.hypot(midX - near.x, midY - near.y);
+  };
+
+  // When a "near" point is supplied, prefer edges within nearRadius of it
+  // (shuffled among themselves so it's not always the exact same spot),
+  // falling back to the rest of the maze if there aren't enough nearby
+  // candidates left (e.g. everything close to the player is protected).
+  const rankByProximity = (list) => {
+    if (!near) return shuffleInPlace(list, rng);
+    const close = [];
+    const far = [];
+    for (const e of list) {
+      if (edgeDist(e) <= nearRadius) close.push(e);
+      else far.push(e);
+    }
+    return [...shuffleInPlace(close, rng), ...shuffleInPlace(far, rng)];
+  };
+
+  const closedCandidates = rankByProximity(
     edges.filter((e) => grid[e.y][e.x][e.dir] && !edgeTouchesProtected(e, protectedSet)),
-    rng,
   );
-  const openCandidates = shuffleInPlace(
+  const openCandidates = rankByProximity(
     edges.filter((e) => !grid[e.y][e.x][e.dir] && !edgeTouchesProtected(e, protectedSet)),
-    rng,
   );
 
   const changes = [];
 
   for (const edge of closedCandidates) {
     if (changes.filter((c) => c.type === 'fall').length >= fallCount) break;
+    const elevHere = grid[edge.y][edge.x].elevation || 0;
+    const elevThere = grid[edge.ny][edge.nx].elevation || 0;
+    let flattened = false;
+    if (elevHere !== elevThere) {
+      // Opening this wall would otherwise connect two floors at different
+      // heights with no ramp between them. Flatten whichever side's
+      // connected same-elevation area (its "plateau") is smaller onto the
+      // other side's height, so the new opening reads as normal flat
+      // ground instead of a broken seam. If that's not safely possible
+      // (too large a height gap elsewhere, or it would move the floor
+      // under a protected cell like the player), skip this edge.
+      const sizeHere = collectPlateau(grid, w, h, edge.x, edge.y).cells.length;
+      const sizeThere = collectPlateau(grid, w, h, edge.nx, edge.ny).cells.length;
+      const ok =
+        sizeHere <= sizeThere
+          ? flattenPlateauIfSafe(grid, w, h, edge.x, edge.y, elevThere, protectedSet)
+          : flattenPlateauIfSafe(grid, w, h, edge.nx, edge.ny, elevHere, protectedSet);
+      if (!ok) continue;
+      flattened = true;
+    }
     setWall(grid, w, h, edge.x, edge.y, edge.dir, false);
-    changes.push({ type: 'fall', x: edge.x, y: edge.y, dir: edge.dir, nx: edge.nx, ny: edge.ny });
+    changes.push({
+      type: 'fall',
+      x: edge.x,
+      y: edge.y,
+      dir: edge.dir,
+      nx: edge.nx,
+      ny: edge.ny,
+      flattened,
+    });
   }
 
   for (const edge of openCandidates) {

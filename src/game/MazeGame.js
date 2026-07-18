@@ -95,6 +95,12 @@ const WALL_SHIFT_MAX_DELAY = 32;
 const WALL_RISE_DURATION = 1.1;
 const WALL_SINK_DURATION = 0.85;
 const WALL_SHIFT_PROTECT_RADIUS = 1;
+const WALL_SHIFT_NEAR_RADIUS = 4;
+const WALL_SHIFT_STAGGER = 0.14;
+const WALL_SHIFT_STAGGER_JITTER = 0.22;
+const WALL_SHIFT_SOUND_MAX_DIST = 26;
+const WALL_SHIFT_DEBRIS_COUNT = 12;
+const WALL_SHIFT_DEBRIS_LIFE = 0.85;
 const SURFACE_TYPES = ['stone', 'grass', 'mud', 'water'];
 const STAIN_TYPES = ['blood', 'mud', 'damp'];
 const STAIN_CHANCE = 0.45;
@@ -297,6 +303,18 @@ function makeDustCanvas() {
   ctx.fillRect(0, 0, 32, 32);
   return c;
 }
+function makeDebrisCanvas() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0, 'rgba(210, 205, 195, 0.9)');
+  grad.addColorStop(0.4, 'rgba(150, 140, 130, 0.5)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 32, 32);
+  return c;
+}
 function makeBrushedMetalCanvas(base = [46, 47, 51], highlight = [235, 238, 245]) {
   const c = document.createElement('canvas');
   c.width = 128;
@@ -489,6 +507,8 @@ export class MazeGame {
     this.floorMeshes = [];
     this._wallMeshByEdge = new Map();
     this._wallAnims = [];
+    this._wallDebrisBursts = [];
+    this._debrisTex = null;
     this._nextShiftIn = null;
     this.stoneCanvas = makeStoneCanvas();
     this._floorMaterials = this._buildFloorMaterials();
@@ -939,6 +959,14 @@ export class MazeGame {
     this.wallMeshes = [];
     this._wallMeshByEdge.clear();
     this._wallAnims = [];
+    if (this._wallDebrisBursts) {
+      for (const b of this._wallDebrisBursts) {
+        this.scene.remove(b.points);
+        b.points.geometry.dispose();
+        b.points.material.dispose();
+      }
+    }
+    this._wallDebrisBursts = [];
     this._nextShiftIn = null;
     for (const m of this.floorMeshes) this.scene.remove(m);
     this.floorMeshes = [];
@@ -979,6 +1007,14 @@ export class MazeGame {
       stain.rotation.y = faceSign > 0 ? Math.PI / 2 : -Math.PI / 2;
     }
     wallMesh.add(stain);
+  }
+  _rebuildFloor() {
+    for (const m of this.floorMeshes) {
+      this.scene.remove(m);
+      if (m.geometry) m.geometry.dispose();
+    }
+    this.floorMeshes = [];
+    this._buildFloor(this.mazeW, this.mazeH);
   }
   _buildFloor(w, h) {
     const FLOOR_THICKNESS = 4.0;
@@ -2042,6 +2078,7 @@ export class MazeGame {
   }
   _updateMazeShift(dt) {
     this._updateWallAnimations(dt);
+    this._updateWallDebris(dt);
     if (this._nextShiftIn === null) {
       this._scheduleNextShift();
       return;
@@ -2066,14 +2103,23 @@ export class MazeGame {
   }
   _triggerMazeShift() {
     if (!this.maze || !this.mazeW || !this.mazeH) return;
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
     const changes = pickMazeShift(this.maze, this.mazeW, this.mazeH, {
       rng: this.rng || Math.random,
       fallCount: 2,
       riseCount: 2,
       protectedCells: this._shiftProtectedCells(),
+      near: { x: cx, y: cy },
+      nearRadius: WALL_SHIFT_NEAR_RADIUS,
     });
     if (!changes || !changes.length) return;
-    for (const change of changes) this._animateWallChange(change);
+    const rng = this.rng || Math.random;
+    changes.forEach((change, i) => {
+      this._animateWallChange(change, i);
+      const delay = i * WALL_SHIFT_STAGGER + rng() * WALL_SHIFT_STAGGER_JITTER;
+      this.audio.playMazeShift(change.type, delay);
+    });
+    if (changes.some((c) => c.flattened)) this._rebuildFloor();
     if (this.callbacks.onMazeShift) this.callbacks.onMazeShift(changes);
   }
   _wallEdgeTransform(x, y, dir) {
@@ -2084,8 +2130,11 @@ export class MazeGame {
     }
     return { geo: this._wallGeo, px: cx, pz: cz + CELL / 2 };
   }
-  _animateWallChange(change) {
+  _animateWallChange(change, index = 0) {
     const key = this._edgeKey(change.x, change.y, change.dir);
+    const rng = this.rng || Math.random;
+    const delay = index * WALL_SHIFT_STAGGER + rng() * WALL_SHIFT_STAGGER_JITTER;
+    const { px, pz } = this._wallEdgeTransform(change.x, change.y, change.dir);
     if (change.type === 'fall') {
       const mesh = this._wallMeshByEdge.get(key);
       if (!mesh) return;
@@ -2094,13 +2143,18 @@ export class MazeGame {
         mesh,
         kind: 'sink',
         elapsed: 0,
+        delay,
+        started: false,
         duration: WALL_SINK_DURATION,
         startY: mesh.position.y,
         endY: this._wallBottom - this._wallSpan / 2 - 0.4,
+        wx: px,
+        wz: pz,
+        floorY: this._wallBottom,
       });
     } else if (change.type === 'rise') {
       if (this._wallMeshByEdge.has(key) || !this._wallGeo || !this._wallGeoV) return;
-      const { geo, px, pz } = this._wallEdgeTransform(change.x, change.y, change.dir);
+      const { geo } = this._wallEdgeTransform(change.x, change.y, change.dir);
       const startY = this._wallBottom - this._wallSpan / 2 - 0.4;
       const m = new THREE.Mesh(geo, this._wallMat);
       m.position.set(px, startY, pz);
@@ -2112,9 +2166,14 @@ export class MazeGame {
         mesh: m,
         kind: 'rise',
         elapsed: 0,
+        delay,
+        started: false,
         duration: WALL_RISE_DURATION,
         startY,
         endY: this._wallCenterY,
+        wx: px,
+        wz: pz,
+        floorY: this._wallBottom,
       });
     }
   }
@@ -2122,6 +2181,15 @@ export class MazeGame {
     if (!this._wallAnims.length) return;
     for (let i = this._wallAnims.length - 1; i >= 0; i--) {
       const anim = this._wallAnims[i];
+      if (anim.delay > 0) {
+        anim.delay -= dt;
+        if (anim.delay > 0) continue;
+      }
+      if (!anim.started) {
+        anim.started = true;
+        this._playWallShiftSound(anim.kind, anim.wx, anim.wz);
+        this._spawnWallDebris(anim.wx, anim.floorY, anim.wz);
+      }
       anim.elapsed += dt;
       const t = Math.min(1, anim.elapsed / anim.duration);
       const eased = anim.kind === 'rise' ? this._easeOutCubic(t) : t * t * t;
@@ -2136,6 +2204,114 @@ export class MazeGame {
           }
         }
         this._wallAnims.splice(i, 1);
+      }
+    }
+  }
+  _playWallShiftSound(kind, wx, wz) {
+    this._ensureSfxContext();
+    if (this.sfxCtx.state === 'suspended') this.sfxCtx.resume();
+    const ctx = this.sfxCtx;
+    const dx = wx - this.player.x;
+    const dz = wz - this.player.z;
+    const dist = Math.hypot(dx, dz);
+    const distFactor = Math.max(0, 1 - dist / WALL_SHIFT_SOUND_MAX_DIST);
+    if (distFactor <= 0) return;
+    const angleToWall = Math.atan2(dx, -dz);
+    const angleFromFacing = ((angleToWall - this.yaw + Math.PI) % (Math.PI * 2)) - Math.PI;
+    const pan = Math.max(-1, Math.min(1, Math.sin(angleFromFacing)));
+    const now = ctx.currentTime;
+    let out = this.sfxMaster;
+    if (ctx.createStereoPanner) {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = pan;
+      panner.connect(this.sfxMaster);
+      out = panner;
+    }
+    const dur = kind === 'rise' ? 0.9 : 0.55;
+    const bufferSize = Math.floor(ctx.sampleRate * dur);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const filt = ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.Q.value = 0.7;
+    if (kind === 'rise') {
+      filt.frequency.setValueAtTime(130, now);
+      filt.frequency.linearRampToValueAtTime(340, now + dur);
+    } else {
+      filt.frequency.setValueAtTime(320, now);
+      filt.frequency.exponentialRampToValueAtTime(85, now + dur);
+    }
+    const g = ctx.createGain();
+    const peak = 0.32 * distFactor;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(peak, now + dur * 0.2);
+    g.gain.linearRampToValueAtTime(0, now + dur);
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(out);
+    src.start(now);
+    src.stop(now + dur);
+  }
+  _spawnWallDebris(x, floorY, z) {
+    if (!this._debrisTex) this._debrisTex = new THREE.CanvasTexture(makeDebrisCanvas());
+    const rng = this.rng || Math.random;
+    const count = WALL_SHIFT_DEBRIS_COUNT;
+    const positions = new Float32Array(count * 3);
+    const velocities = [];
+    for (let i = 0; i < count; i++) {
+      const ang = rng() * Math.PI * 2;
+      const r = rng() * 0.3;
+      positions[i * 3] = x + Math.cos(ang) * r;
+      positions[i * 3 + 1] = floorY + 0.05;
+      positions[i * 3 + 2] = z + Math.sin(ang) * r;
+      velocities.push({
+        x: Math.cos(ang) * (0.4 + rng() * 0.8),
+        y: 1.2 + rng() * 1.6,
+        z: Math.sin(ang) * (0.4 + rng() * 0.8),
+      });
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      map: this._debrisTex,
+      size: 0.16,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    this.scene.add(points);
+    this._wallDebrisBursts.push({
+      points,
+      velocities,
+      life: WALL_SHIFT_DEBRIS_LIFE,
+      maxLife: WALL_SHIFT_DEBRIS_LIFE,
+    });
+  }
+  _updateWallDebris(dt) {
+    if (!this._wallDebrisBursts.length) return;
+    for (let i = this._wallDebrisBursts.length - 1; i >= 0; i--) {
+      const b = this._wallDebrisBursts[i];
+      b.life -= dt;
+      const pos = b.points.geometry.attributes.position;
+      for (let p = 0; p < b.velocities.length; p++) {
+        const v = b.velocities[p];
+        pos.array[p * 3] += v.x * dt;
+        pos.array[p * 3 + 1] += v.y * dt;
+        pos.array[p * 3 + 2] += v.z * dt;
+        v.y -= 3.4 * dt;
+      }
+      pos.needsUpdate = true;
+      b.points.material.opacity = Math.max(0, b.life / b.maxLife) * 0.6;
+      if (b.life <= 0) {
+        this.scene.remove(b.points);
+        b.points.geometry.dispose();
+        b.points.material.dispose();
+        this._wallDebrisBursts.splice(i, 1);
       }
     }
   }
@@ -2209,6 +2385,7 @@ export class MazeGame {
       this._dustPoints.material.dispose();
     }
     if (this._dustTex) this._dustTex.dispose();
+    if (this._debrisTex) this._debrisTex.dispose();
     if (this._viewmodelEnvTex) this._viewmodelEnvTex.dispose();
     if (this._gltfRoots) {
       this._gltfRoots.forEach((root) => {
