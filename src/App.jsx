@@ -83,11 +83,11 @@ export default function App() {
         setTimeout(() => setExitToast((cur) => (cur === info.nextLabel ? null : cur)), 2200);
       },
       onDescend: (newLevel, letter, fromLevel, newFloorLabel) => {
-        // MazeGame.descend() no longer touches running/pointer-lock/audio —
-        // it just rebuilds the next floor in place and keeps playing, so
-        // there's nothing to resume here. See the comment on descend()
-        // itself for why (it used to call stop(), which caused a spurious
-        // auto-pause right after every descent).
+        
+        
+        
+        
+        
         setDoorPrompt(null);
         setFlash(true);
         setTimeout(() => setFlash(false), 400);
@@ -134,9 +134,9 @@ export default function App() {
     setPhase('playing');
     game.requestPointerLock();
 
-    // Best-effort landscape lock — has to happen inside a user gesture.
-    // Not supported on iOS Safari at all, and some Android browsers only
-    // allow it in fullscreen, so failures here are expected and silent.
+    
+    
+    
     if (isTouchDevice && screen.orientation && screen.orientation.lock) {
       screen.orientation.lock('landscape').catch(() => {});
     }
@@ -276,7 +276,7 @@ export default function App() {
       {phase === 'menu' && (
         <div className="overlay">
           <div className="panel">
-            <h1>DEEPWALK<span>.</span></h1>
+            <h1>DEEPWALK</h1>
 
             <div className="seed-block">
               <div className="seed-tabs">
@@ -285,14 +285,14 @@ export default function App() {
                   className={`seed-tab ${seedMode === 'random' ? 'active' : ''}`}
                   onClick={() => setSeedMode('random')}
                 >
-                  Random Seed
+                  Random World
                 </button>
                 <button
                   type="button"
                   className={`seed-tab ${seedMode === 'custom' ? 'active' : ''}`}
                   onClick={() => setSeedMode('custom')}
                 >
-                  Custom Seed
+                  Custom World
                 </button>
               </div>
               {seedMode === 'custom' && (
@@ -320,7 +320,7 @@ export default function App() {
               </button>
               <span>{musicOn ? 'On' : 'Off'}</span>
             </div>
-            <button onClick={startGame}>Strike the torch</button>
+            <button onClick={startGame}>Play Now</button>
             {isTouchDevice ? (
               <div className="keys">
                 <b>Left stick</b> move &nbsp;&middot;&nbsp; <b>drag</b> look &nbsp;&middot;&nbsp;{' '}
@@ -328,7 +328,7 @@ export default function App() {
               </div>
             ) : (
               <div className="keys">
-                <b>W A S D</b> move &nbsp;&middot;&nbsp; <b>SPACE</b> jump &nbsp;&middot;&nbsp; <b>CTRL</b> crouch &nbsp;&middot;&nbsp; <b>E</b> open door &nbsp;&middot;&nbsp; <b>ESC</b> pause
+                <b>W A S D</b> move &nbsp;&middot;&nbsp; <b>SPACE</b> jump &nbsp;&middot;&nbsp; <b>CTRL</b> crouch &nbsp;&middot;&nbsp; <b>ESC</b> pause
               </div>
             )}
           </div>

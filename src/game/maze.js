@@ -474,10 +474,10 @@ function shuffleInPlace(arr, rng) {
   return arr;
 }
 
-// Collects the connected "plateau" of cells reachable from (sx, sy) through
-// open edges that all share the same elevation, plus the boundary edges
-// where the elevation changes (ramps, or edges that are about to become
-// mismatched).
+
+
+
+
 function collectPlateau(grid, w, h, sx, sy) {
   const startElevation = grid[sy][sx].elevation || 0;
   const key = (x, y) => y * 100000 + x;
@@ -510,12 +510,12 @@ function collectPlateau(grid, w, h, sx, sy) {
   return { cells, boundary, elevation: startElevation };
 }
 
-// Flattens the plateau containing (sx, sy) to targetElevation, keeping every
-// ramp on its border internally consistent (recomputed rather than left
-// stale). Refuses (and leaves the grid untouched) if that would require an
-// unsupported multi-level step at a border, or if the plateau contains any
-// protected cell (e.g. the player's current position) that shouldn't have
-// its floor height silently change underfoot.
+
+
+
+
+
+
 function flattenPlateauIfSafe(grid, w, h, sx, sy, targetElevation, protectedSet) {
   const { cells, boundary, elevation } = collectPlateau(grid, w, h, sx, sy);
   if (protectedSet) {
@@ -566,10 +566,10 @@ export function pickMazeShift(grid, w, h, opts = {}) {
     return Math.hypot(midX - near.x, midY - near.y);
   };
 
-  // When a "near" point is supplied, prefer edges within nearRadius of it
-  // (shuffled among themselves so it's not always the exact same spot),
-  // falling back to the rest of the maze if there aren't enough nearby
-  // candidates left (e.g. everything close to the player is protected).
+  
+  
+  
+  
   const rankByProximity = (list) => {
     if (!near) return shuffleInPlace(list, rng);
     const close = [];
@@ -596,13 +596,13 @@ export function pickMazeShift(grid, w, h, opts = {}) {
     const elevThere = grid[edge.ny][edge.nx].elevation || 0;
     let flattened = false;
     if (elevHere !== elevThere) {
-      // Opening this wall would otherwise connect two floors at different
-      // heights with no ramp between them. Flatten whichever side's
-      // connected same-elevation area (its "plateau") is smaller onto the
-      // other side's height, so the new opening reads as normal flat
-      // ground instead of a broken seam. If that's not safely possible
-      // (too large a height gap elsewhere, or it would move the floor
-      // under a protected cell like the player), skip this edge.
+      
+      
+      
+      
+      
+      
+      
       const sizeHere = collectPlateau(grid, w, h, edge.x, edge.y).cells.length;
       const sizeThere = collectPlateau(grid, w, h, edge.nx, edge.ny).cells.length;
       const ok =

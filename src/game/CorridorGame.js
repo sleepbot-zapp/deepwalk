@@ -23,18 +23,6 @@ function makeStripeTexture(color, length) {
   return tex;
 }
 
-/**
- * CorridorGame — a minimal FPS movement/look test.
- *
- * Mouse look and WASD movement are intentionally independent, the way a
- * normal FPS works:
- *  - moving the mouse only changes `yaw`/`pitch` (which way the camera faces)
- *  - WASD moves the player relative to the CURRENT facing direction (yaw),
- *    it never touches yaw/pitch itself
- *
- * Framework-agnostic, same pattern as MazeGame: React just mounts it into a
- * div and reads state back out via callbacks.
- */
 export class CorridorGame {
   constructor(container, callbacks = {}) {
     this.container = container;

@@ -1,16 +1,7 @@
 import React, { useRef, useState, useCallback } from 'react';
 
-const JOYSTICK_RADIUS = 58; // px the thumb is allowed to travel from center
+const JOYSTICK_RADIUS = 58; 
 
-/**
- * Mobile control overlay: a virtual joystick (movement), a full-screen
- * drag surface that feeds the same yaw/pitch look as mouse-move on
- * desktop, and buttons for jump / crouch / door-interact.
- *
- * Talks to the game purely through the small touch-control API added to
- * MazeGame (setJoystickVector, clearJoystick, lookDelta, tryJump,
- * setCrouch, interact) — it doesn't reach into game internals directly.
- */
 export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChange }) {
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
   const stickBaseRef = useRef(null);
@@ -18,8 +9,6 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
 
   const lookPointerId = useRef(null);
   const lookLast = useRef({ x: 0, y: 0 });
-
-  // ---- Joystick ----
 
   const updateStick = useCallback(
     (clientX, clientY) => {
@@ -65,7 +54,7 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     game?.clearJoystick();
   }, [game]);
 
-  // ---- Look drag surface ----
+  
 
   const onLookDown = useCallback((e) => {
     if (lookPointerId.current !== null) return;
@@ -90,7 +79,7 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     lookPointerId.current = null;
   }, []);
 
-  // ---- Buttons ----
+  
 
   const onJumpDown = useCallback(
     (e) => {

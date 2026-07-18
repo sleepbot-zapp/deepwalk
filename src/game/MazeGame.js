@@ -38,6 +38,8 @@ const TORCH_HEIGHT_OFFSET = 0.3;
 const TORCH_ANGLE = Math.PI / 8;
 const TORCH_THROW = 6;
 const TORCH_GLOW_RADIUS = 6.5;
+const TORCH_NEAR_REF_DIST = 3.2;
+const TORCH_NEAR_MIN_FACTOR = 0.015;
 const PROGRESS_FOLLOW_RATE = 0.35;
 const VIEWMODEL_FOV = 52;
 const VIEWMODEL_WALK_BOB_SPEED = 9.2;
@@ -104,6 +106,84 @@ const WALL_SHIFT_DEBRIS_LIFE = 0.85;
 const SURFACE_TYPES = ['stone', 'grass', 'mud', 'water'];
 const STAIN_TYPES = ['blood', 'mud', 'damp'];
 const STAIN_CHANCE = 0.45;
+const WALL_STYLE_WEIGHTS = [
+  {
+    style: 'normal',
+    weight: 0.58,
+  },
+  {
+    style: 'eerie1',
+    weight: 0.14,
+  },
+  {
+    style: 'eerie2',
+    weight: 0.14,
+  },
+  {
+    style: 'cracked',
+    weight: 0.14,
+  },
+];
+const PAINTING_CHANCE = 0.09;
+const PAINTING_MAX_PER_MAZE_BASE = 5;
+const PAINTING_MAX_PER_MAZE_PER_CELL = 0.018;
+const PAINTING_SCENES = [
+  'tall_figure',
+  'crouched_figure',
+  'antler_figure',
+  'hollow_eye',
+  'hallway',
+  'moon_figure',
+  'hooded_figure',
+  'smiley_face',
+  'symbol',
+  'tally_marks',
+  'handprints',
+  'spiral',
+  'mask',
+  'door_ajar',
+  'staircase',
+  'teeth',
+  'family_wrong',
+];
+const CREEPY_CAPTIONS = [
+  'IT WAITS WHERE YOU DO NOT LOOK.',
+  'DO YOU SEE WHAT I SEE?',
+  'NOT ALL DOORS SHOULD BE OPENED.',
+  'I AM NOT SUPPOSED TO BE HERE',
+  'HE WATCHES WHEN YOU SLEEP',
+  "DON'T GO DOWN THERE.",
+  'FOLLOW ME',
+  "I'M STILL HERE",
+  'I SEE YOU',
+  'HELP ME',
+  'DO NOT LOOK BEHIND YOU.',
+  'STAY ON THE PATH.',
+  'TURN BACK NOW.',
+  'KEEP THE LIGHT ON.',
+  "DON'T TRUST THE MIRRORS.",
+  'DAY 47. STILL NO WAY OUT.',
+  'THE WALLS MOVED AGAIN.',
+  'THERE ARE ALWAYS MORE DOORS.',
+  'SOMETHING IS UNDER THE FLOOR.',
+  "MOMMY SAYS HE ISN'T REAL.",
+  'WE USED TO PLAY HERE.',
+  'THIS WAS MY ROOM.',
+  'PLEASE LET ME OUT.',
+  'IS ANYONE THERE?',
+  'THE HALLWAY REMEMBERS.',
+  'IT WEARS DIFFERENT FACES.',
+  'EVERY EXIT LEADS BACK HERE.',
+  'THE LIGHT ATTRACTS IT.',
+  'YOU ARE NOT ALONE HERE.',
+  'SEVEN STEPS. NEVER EIGHT.',
+  'DO NOT COUNT THE DOORS.',
+  'IT KNOWS YOUR NAME.',
+  'WHO LEFT THE LIGHTS ON?',
+  'I HEARD IT BREATHING.',
+  'NO ONE ELSE REMEMBERS THIS PLACE.',
+  'IT ONLY MOVES WHEN YOU BLINK.',
+];
 function makeStoneCanvas() {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
@@ -116,6 +196,855 @@ function makeStoneCanvas() {
     const s = 1 + Math.random() * 3;
     ctx.fillRect(Math.random() * 256, Math.random() * 256, s, s);
   }
+  return c;
+}
+function makeEerieStoneCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#585349';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 3200; i++) {
+    const g = 50 + rng() * 55;
+    const sick = rng() < 0.3;
+    const r = sick ? g + 18 : g;
+    const gr = sick ? g + 22 : g;
+    const b = sick ? g - 10 : g + 4;
+    ctx.fillStyle = `rgba(${r},${gr},${b},${(0.05 + rng() * 0.14).toFixed(2)})`;
+    const s = 1 + rng() * 3;
+    ctx.fillRect(rng() * 256, rng() * 256, s, s);
+  }
+  const veins = 6 + Math.floor(rng() * 6);
+  for (let i = 0; i < veins; i++) {
+    let x = rng() * 256,
+      y = rng() * 256;
+    ctx.strokeStyle = `rgba(20,16,14,${(0.25 + rng() * 0.3).toFixed(2)})`;
+    ctx.lineWidth = 0.6 + rng() * 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    const segs = 5 + Math.floor(rng() * 6);
+    for (let s = 0; s < segs; s++) {
+      x += (rng() - 0.5) * 30;
+      y += (rng() - 0.5) * 30;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < 5; i++) {
+    const x = rng() * 256,
+      y = rng() * 256,
+      r = 10 + rng() * 26;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, `rgba(70,90,60,${(0.08 + rng() * 0.1).toFixed(2)})`);
+    grad.addColorStop(1, 'rgba(70,90,60,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  return c;
+}
+function makeCrackedStoneCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#a9a49a';
+  ctx.fillRect(0, 0, 256, 256);
+  const blockW = 64,
+    blockH = 32;
+  for (let y = 0; y < 256; y += blockH) {
+    const offset = (y / blockH) % 2 === 0 ? 0 : blockW / 2;
+    for (let x = -blockW; x < 256 + blockW; x += blockW) {
+      const g = 150 + rng() * 40;
+      ctx.fillStyle = `rgba(${g},${g - 4},${g - 10},${(0.06 + rng() * 0.08).toFixed(2)})`;
+      ctx.fillRect(x + offset, y, blockW - 3, blockH - 3);
+    }
+  }
+  ctx.strokeStyle = 'rgba(40,36,32,0.5)';
+  ctx.lineWidth = 2;
+  for (let y = 0; y <= 256; y += blockH) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(256, y);
+    ctx.stroke();
+  }
+  const cracks = 10 + Math.floor(rng() * 10);
+  for (let i = 0; i < cracks; i++) {
+    let x = rng() * 256,
+      y = rng() * 256;
+    ctx.strokeStyle = `rgba(15,13,12,${(0.3 + rng() * 0.35).toFixed(2)})`;
+    ctx.lineWidth = 0.8 + rng() * 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    const segs = 4 + Math.floor(rng() * 5);
+    for (let s = 0; s < segs; s++) {
+      x += (rng() - 0.5) * 22;
+      y += (rng() - 0.5) * 22;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  return c;
+}
+function _shakyText(ctx, text, cx, cy, opts = {}) {
+  const {
+    rng = Math.random,
+    size = 13,
+    color = 'rgba(25,18,14,0.88)',
+    maxWidth = 160,
+    lineHeight = 1.3,
+    font = 'Georgia, "Times New Roman", serif',
+  } = opts;
+  ctx.save();
+  ctx.font = `${size}px ${font}`;
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'alphabetic';
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = w;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  const totalH = lines.length * size * lineHeight;
+  let ly = cy - totalH / 2 + size;
+  for (const ln of lines) {
+    const lw = ctx.measureText(ln).width;
+    let lx = cx - lw / 2;
+    for (const ch of ln) {
+      const cw = ctx.measureText(ch).width;
+      ctx.save();
+      ctx.translate(lx + (rng() - 0.5) * 1.1, ly + (rng() - 0.5) * 1.6);
+      ctx.rotate((rng() - 0.5) * 0.07);
+      ctx.fillText(ch, 0, 0);
+      ctx.restore();
+      lx += cw;
+    }
+    ly += size * lineHeight;
+  }
+  ctx.restore();
+}
+function _sketchStroke(ctx, pts, opts = {}) {
+  const {
+    rng = Math.random,
+    color = 'rgba(20,16,14,0.8)',
+    width = 1.3,
+    passes = 2,
+    jitter = 1.4,
+  } = opts;
+  for (let p = 0; p < passes; p++) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width * (0.7 + rng() * 0.6);
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => {
+      const jx = x + (rng() - 0.5) * jitter;
+      const jy = y + (rng() - 0.5) * jitter;
+      if (i === 0) ctx.moveTo(jx, jy);
+      else ctx.lineTo(jx, jy);
+    });
+    ctx.stroke();
+  }
+}
+function _paperTexture(ctx, w, h, rng) {
+  const base = 172 + rng() * 22;
+  ctx.fillStyle = `rgb(${base},${base - 10},${base - 30})`;
+  ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 50; i++) {
+    const x = rng() * w,
+      y = rng() * h,
+      r = 8 + rng() * 40;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, `rgba(95,72,40,${(0.04 + rng() * 0.08).toFixed(2)})`);
+    grad.addColorStop(1, 'rgba(95,72,40,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < 900; i++) {
+    ctx.fillStyle = `rgba(60,45,25,${(0.02 + rng() * 0.05).toFixed(2)})`;
+    ctx.fillRect(rng() * w, rng() * h, 1, 1);
+  }
+  const vg = ctx.createRadialGradient(
+    w / 2,
+    h / 2,
+    Math.min(w, h) * 0.3,
+    w / 2,
+    h / 2,
+    Math.max(w, h) * 0.7,
+  );
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(15,10,6,0.5)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, w, h);
+}
+function _crayonPaperTexture(ctx, w, h, rng) {
+  const base = 220 + rng() * 16;
+  ctx.fillStyle = `rgb(${base},${base - 4},${base - 16})`;
+  ctx.fillRect(0, 0, w, h);
+  if (rng() < 0.55) {
+    const hue = Math.floor(rng() * 360);
+    ctx.strokeStyle = `hsla(${hue},70%,45%,0.3)`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 130; i++) {
+      const x = rng() * w,
+        y = rng() * h;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (rng() - 0.5) * 14, y + (rng() - 0.5) * 14);
+      ctx.stroke();
+    }
+  }
+  for (let i = 0; i < 400; i++) {
+    ctx.fillStyle = `rgba(100,80,50,${(0.02 + rng() * 0.05).toFixed(2)})`;
+    ctx.fillRect(rng() * w, rng() * h, 1, 1);
+  }
+}
+function _sceneTallFigure(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2 + (rng() - 0.5) * iw * 0.08;
+  const headR = iw * 0.11;
+  const headY = iy + ih * 0.16;
+  if (pal.ink) {
+    ctx.strokeStyle = pal.accent;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 2; i++) {
+      ctx.beginPath();
+      ctx.arc(cx, headY, headR * (1.8 + i * 0.35), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  const shoulderY = headY + headR * 1.3;
+  const hipY = iy + ih * 0.6;
+  const footY = iy + ih * 0.92;
+  const shoulderW = iw * 0.15;
+  const hipW = iw * 0.075;
+  ctx.fillStyle = pal.fill;
+  ctx.beginPath();
+  ctx.ellipse(cx, headY, headR * 0.82, headR, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - shoulderW, shoulderY);
+  ctx.lineTo(cx - hipW, hipY);
+  ctx.lineTo(cx - hipW * 0.55, footY);
+  ctx.lineTo(cx + hipW * 0.55, footY);
+  ctx.lineTo(cx + hipW, hipY);
+  ctx.lineTo(cx + shoulderW, shoulderY);
+  ctx.closePath();
+  ctx.fill();
+  for (const side of [-1, 1]) {
+    const sx = cx + side * shoulderW * 0.85;
+    const bendY = shoulderY + ih * (0.22 + rng() * 0.08);
+    const ex = sx + side * (iw * 0.05 + rng() * iw * 0.05);
+    const ey = shoulderY + ih * (0.42 + rng() * 0.08);
+    _sketchStroke(
+      ctx,
+      [
+        [sx, shoulderY + 2],
+        [sx + side * 3, bendY],
+        [ex, ey],
+      ],
+      {
+        rng,
+        color: pal.stroke,
+        passes: pal.ink ? 2 : 1,
+        width: pal.ink ? 1.3 : 2.4,
+        jitter: pal.ink ? 1.6 : 0.5,
+      },
+    );
+    for (let f = 0; f < 3; f++) {
+      _sketchStroke(
+        ctx,
+        [
+          [ex, ey],
+          [ex + side * (2 + rng() * 4), ey + 6 + rng() * 6],
+        ],
+        { rng, color: pal.stroke, passes: 1, width: 0.9, jitter: 0.8 },
+      );
+    }
+  }
+}
+function _sceneCrouchedFigure(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2 + (rng() - 0.5) * iw * 0.1;
+  const baseY = iy + ih * 0.86;
+  const w = iw * 0.34;
+  const h = ih * 0.4;
+  ctx.fillStyle = pal.fill;
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.5, baseY);
+  ctx.quadraticCurveTo(cx - w * 0.65, baseY - h * 0.6, cx - w * 0.15, baseY - h);
+  ctx.quadraticCurveTo(cx, baseY - h * 1.12, cx + w * 0.15, baseY - h);
+  ctx.quadraticCurveTo(cx + w * 0.65, baseY - h * 0.6, cx + w * 0.5, baseY);
+  ctx.closePath();
+  ctx.fill();
+  const headR = iw * 0.09;
+  ctx.beginPath();
+  ctx.ellipse(cx, baseY - h - headR * 0.5, headR * 0.8, headR, 0, 0, Math.PI * 2);
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    _sketchStroke(
+      ctx,
+      [
+        [cx - w * 0.3, baseY - h * (0.3 + i * 0.15)],
+        [cx, baseY - h * (0.45 + i * 0.1)],
+        [cx + w * 0.3, baseY - h * (0.3 + i * 0.15)],
+      ],
+      { rng, color: pal.stroke, passes: pal.ink ? 2 : 1, width: pal.ink ? 1 : 2, jitter: 1.4 },
+    );
+  }
+  ctx.fillStyle = pal.accent;
+  ctx.beginPath();
+  ctx.ellipse(cx, baseY + 3, w * 0.65, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+function _sceneAntlerFigure(ctx, ix, iy, iw, ih, rng, pal) {
+  _sceneTallFigure(ctx, ix, iy, iw, ih, rng, pal);
+  const cx = ix + iw / 2;
+  const headY = iy + ih * 0.16;
+  const headR = iw * 0.11;
+  for (const side of [-1, 1]) {
+    let x = cx + side * headR * 0.4,
+      y = headY - headR * 0.6;
+    const branches = 3 + Math.floor(rng() * 2);
+    for (let b = 0; b < branches; b++) {
+      const nx = x + side * (4 + rng() * 8);
+      const ny = y - (8 + rng() * 10);
+      _sketchStroke(ctx, [[x, y], [nx, ny]], {
+        rng,
+        color: pal.stroke,
+        passes: 1,
+        width: 1.1,
+        jitter: 0.6,
+      });
+      if (rng() < 0.7) {
+        _sketchStroke(
+          ctx,
+          [
+            [x + side * 2, y - 4],
+            [x + side * (7 + rng() * 5), y - 8 - rng() * 6],
+          ],
+          { rng, color: pal.stroke, passes: 1, width: 0.9, jitter: 0.6 },
+        );
+      }
+      x = nx;
+      y = ny;
+    }
+  }
+}
+function _sceneEye(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.42;
+  const w = iw * 0.7,
+    h = ih * 0.26;
+  ctx.fillStyle = pal.fill;
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2, cy);
+  ctx.quadraticCurveTo(cx - w * 0.2, cy - h, cx, cy - h * 0.15);
+  ctx.quadraticCurveTo(cx + w * 0.2, cy - h, cx + w / 2, cy);
+  ctx.quadraticCurveTo(cx + w * 0.2, cy + h, cx, cy + h * 0.15);
+  ctx.quadraticCurveTo(cx - w * 0.2, cy + h, cx - w / 2, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = pal.bg;
+  ctx.beginPath();
+  ctx.arc(cx, cy, h * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.arc(cx, cy, h * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI - Math.PI / 2 + (rng() - 0.5) * 0.1;
+    const x1 = cx + Math.cos(a) * w * 0.5;
+    const y1 = cy - Math.sin(a) * h * 0.9;
+    const len = 8 + rng() * 22;
+    _sketchStroke(
+      ctx,
+      [
+        [x1, y1],
+        [x1 + (rng() - 0.5) * 6, y1 - len],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1, jitter: 1 },
+    );
+  }
+}
+function _sceneHallway(ctx, ix, iy, iw, ih, rng, pal) {
+  const vx = ix + iw * (0.45 + rng() * 0.1),
+    vy = iy + ih * 0.42;
+  ctx.fillStyle = pal.fill;
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  ctx.moveTo(ix, iy + ih);
+  ctx.lineTo(vx - 6, vy);
+  ctx.lineTo(vx + 6, vy);
+  ctx.lineTo(ix + iw, iy + ih);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  for (let i = 1; i < 5; i++) {
+    const t = i / 5;
+    _sketchStroke(
+      ctx,
+      [
+        [ix + (vx - ix) * t * 0.6, iy + ih - (iy + ih - vy) * t * 0.9],
+        [ix + iw - (ix + iw - vx) * t * 0.6, iy + ih - (iy + ih - vy) * t * 0.9],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 0.8, jitter: 1 },
+    );
+  }
+  const fH = ih * 0.1;
+  ctx.fillStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.ellipse(vx + (rng() - 0.5) * 10, vy + fH * 0.9, fH * 0.15, fH * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+function _sceneMoonFigure(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    moonY = iy + ih * 0.28,
+    moonR = iw * 0.14;
+  const grad = ctx.createRadialGradient(cx, moonY, 0, cx, moonY, moonR * 3);
+  grad.addColorStop(0, pal.ink ? 'rgba(210,205,190,0.5)' : 'rgba(255,240,180,0.55)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, moonY, moonR * 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.arc(cx, moonY, moonR, 0, Math.PI * 2);
+  ctx.fill();
+  const horizon = iy + ih * 0.68;
+  ctx.fillStyle = pal.fill;
+  ctx.beginPath();
+  ctx.moveTo(ix, horizon);
+  let x = ix;
+  while (x < ix + iw) {
+    ctx.lineTo(x, horizon - rng() * ih * 0.08);
+    x += 6 + rng() * 10;
+  }
+  ctx.lineTo(ix + iw, iy + ih);
+  ctx.lineTo(ix, iy + ih);
+  ctx.closePath();
+  ctx.fill();
+  const figH = ih * 0.18;
+  ctx.beginPath();
+  ctx.ellipse(
+    cx + (rng() - 0.5) * iw * 0.2,
+    horizon - figH * 0.45,
+    figH * 0.12,
+    figH * 0.5,
+    0,
+    0,
+    Math.PI * 2,
+  );
+  ctx.fill();
+}
+function _sceneHoodedFigure(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2 + (rng() - 0.5) * iw * 0.1;
+  const topY = iy + ih * 0.14,
+    baseY = iy + ih * 0.92;
+  ctx.fillStyle = pal.fill;
+  ctx.beginPath();
+  ctx.moveTo(cx, topY);
+  ctx.quadraticCurveTo(cx - iw * 0.22, topY + (baseY - topY) * 0.3, cx - iw * 0.16, baseY);
+  ctx.lineTo(cx + iw * 0.16, baseY);
+  ctx.quadraticCurveTo(cx + iw * 0.22, topY + (baseY - topY) * 0.3, cx, topY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = pal.bg;
+  const eyeY = topY + (baseY - topY) * 0.18;
+  ctx.beginPath();
+  ctx.arc(cx - iw * 0.045, eyeY, iw * 0.018, 0, Math.PI * 2);
+  ctx.arc(cx + iw * 0.045, eyeY, iw * 0.018, 0, Math.PI * 2);
+  ctx.fill();
+}
+function _sceneSmiley(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.42,
+    r = iw * 0.28;
+  ctx.fillStyle = pal.bg;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.ellipse(cx - r * 0.35, cy - r * 0.1, r * 0.16, r * 0.22, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + r * 0.35, cy - r * 0.1, r * 0.16, r * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = r * 0.1;
+  ctx.strokeStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.55, cy + r * 0.25);
+  ctx.quadraticCurveTo(cx, cy + r * 0.75, cx + r * 0.55, cy + r * 0.25);
+  ctx.stroke();
+  if (rng() < 0.5) {
+    const bloodColor = pal.ink ? 'rgba(120,20,20,0.5)' : '#7a1414';
+    for (const side of [-1, 1]) {
+      _sketchStroke(
+        ctx,
+        [
+          [cx + side * r * 0.35, cy + r * 0.1],
+          [cx + side * r * 0.3, cy + r * 0.5],
+        ],
+        { rng, color: bloodColor, passes: 1, width: 1.4, jitter: 1 },
+      );
+    }
+  }
+}
+function _sceneSymbol(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.42;
+  ctx.strokeStyle = pal.stroke;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, iw * 0.12 + i * iw * 0.06, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  const spikes = 8;
+  for (let i = 0; i < spikes; i++) {
+    const a = (i / spikes) * Math.PI * 2;
+    const r1 = iw * 0.3,
+      r2 = iw * 0.38 + rng() * iw * 0.06;
+    _sketchStroke(
+      ctx,
+      [
+        [cx + Math.cos(a) * r1, cy + Math.sin(a) * r1],
+        [cx + Math.cos(a) * r2, cy + Math.sin(a) * r2],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1, jitter: 0.6 },
+    );
+  }
+  _sketchStroke(
+    ctx,
+    [
+      [cx, cy - iw * 0.4],
+      [cx, cy + iw * 0.4],
+    ],
+    { rng, color: pal.stroke, passes: 1, width: 1, jitter: 0.6 },
+  );
+  _sketchStroke(
+    ctx,
+    [
+      [cx - iw * 0.4, cy],
+      [cx + iw * 0.4, cy],
+    ],
+    { rng, color: pal.stroke, passes: 1, width: 1, jitter: 0.6 },
+  );
+}
+function _sceneTallyMarks(ctx, ix, iy, iw, ih, rng, pal) {
+  const rows = 3 + Math.floor(rng() * 3);
+  const startY = iy + ih * 0.25;
+  const rowGap = ih * 0.14;
+  for (let r = 0; r < rows; r++) {
+    const y = startY + r * rowGap;
+    const groups = 2 + Math.floor(rng() * 3);
+    let x = ix + iw * 0.12;
+    for (let g = 0; g < groups; g++) {
+      for (let i = 0; i < 4; i++) {
+        _sketchStroke(
+          ctx,
+          [
+            [x + i * 4, y],
+            [x + i * 4 + (rng() - 0.5) * 2, y + ih * 0.09],
+          ],
+          { rng, color: pal.stroke, passes: 1, width: pal.ink ? 1.2 : 2, jitter: 0.8 },
+        );
+      }
+      _sketchStroke(
+        ctx,
+        [
+          [x - 2, y + ih * 0.09],
+          [x + 4 * 4 + 2, y],
+        ],
+        { rng, color: pal.stroke, passes: 1, width: pal.ink ? 1.2 : 2, jitter: 0.8 },
+      );
+      x += 4 * 4 + 10;
+    }
+  }
+}
+function _sceneHandprints(ctx, ix, iy, iw, ih, rng, pal) {
+  const color = pal.ink ? 'rgba(110,20,20,0.5)' : '#7a1414';
+  const count = 4 + Math.floor(rng() * 4);
+  for (let i = 0; i < count; i++) {
+    const cx = ix + rng() * iw,
+      cy = iy + rng() * ih;
+    const scale = (0.5 + rng() * 0.5) * iw * 0.012;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((rng() - 0.5) * 1.2);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(0, 10 * scale, 9 * scale, 12 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (let f = -2; f <= 2; f++) {
+      ctx.beginPath();
+      ctx.ellipse(
+        f * 4 * scale,
+        -6 * scale - Math.abs(f) * 1.5 * scale,
+        2.2 * scale,
+        8 * scale,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+function _sceneSpiral(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.42;
+  const maxR = Math.min(iw, ih) * 0.42;
+  ctx.strokeStyle = pal.stroke;
+  ctx.lineWidth = pal.ink ? 1.2 : 2.2;
+  ctx.beginPath();
+  const turns = 5.5;
+  const steps = 160;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = t * Math.PI * 2 * turns;
+    const r = t * maxR;
+    const x = cx + Math.cos(a) * r + (rng() - 0.5) * 0.6;
+    const y = cy + Math.sin(a) * r + (rng() - 0.5) * 0.6;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+function _sceneMask(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.4,
+    r = iw * 0.26;
+  ctx.fillStyle = pal.bg;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r * 0.82, r, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = pal.stroke;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.fillStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.ellipse(cx - r * 0.32, cy - r * 0.05, r * 0.09, r * 0.14, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + r * 0.32, cy - r * 0.05, r * 0.09, r * 0.14, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const my = cy + r * 0.4;
+  _sketchStroke(
+    ctx,
+    [
+      [cx - r * 0.3, my],
+      [cx + r * 0.3, my],
+    ],
+    { rng, color: pal.stroke, passes: 1, width: 1, jitter: 0.5 },
+  );
+  for (let i = -2; i <= 2; i++) {
+    _sketchStroke(
+      ctx,
+      [
+        [cx + i * r * 0.1, my - 3],
+        [cx + i * r * 0.1, my + 3],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 0.8, jitter: 0.4 },
+    );
+  }
+}
+function _sceneDoorAjar(ctx, ix, iy, iw, ih, rng, pal) {
+  const dW = iw * 0.5,
+    dH = ih * 0.62;
+  const dx = ix + iw * 0.25,
+    dy = iy + ih * 0.22;
+  ctx.fillStyle = pal.fill;
+  ctx.fillRect(dx, dy, dW, dH);
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  const gapW = dW * (0.18 + rng() * 0.12);
+  ctx.fillRect(dx + dW - gapW, dy, gapW, dH);
+  ctx.strokeStyle = pal.stroke;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(dx, dy, dW, dH);
+  if (rng() < 0.6) {
+    ctx.fillStyle = pal.stroke;
+    ctx.beginPath();
+    ctx.ellipse(dx + dW - gapW * 0.5, dy + dH * 0.35, gapW * 0.28, gapW * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+function _sceneStaircase(ctx, ix, iy, iw, ih, rng, pal) {
+  const steps = 7;
+  const topW = iw * 0.7,
+    cx = ix + iw / 2;
+  for (let i = 0; i < steps; i++) {
+    const t = i / steps;
+    const y = iy + ih * 0.2 + t * ih * 0.65;
+    const w = topW * (1 - t * 0.7);
+    const shade = pal.ink ? `rgba(20,16,14,${0.15 + t * 0.5})` : `rgba(10,8,8,${0.2 + t * 0.55})`;
+    ctx.fillStyle = shade;
+    ctx.fillRect(cx - w / 2, y, w, ih * 0.07);
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.beginPath();
+  ctx.ellipse(cx, iy + ih * 0.86, topW * 0.16, ih * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+function _sceneTeeth(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.45;
+  const w = iw * 0.6,
+    h = ih * 0.32;
+  ctx.fillStyle = 'rgba(20,4,4,0.75)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pal.bg;
+  const teeth = 8;
+  for (let i = 0; i < teeth; i++) {
+    const t = i / (teeth - 1);
+    const x = cx - w / 2 + t * w;
+    const th = h * 0.3 + rng() * h * 0.15;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.03, cy - h * 0.4);
+    ctx.lineTo(x + w * 0.03, cy - h * 0.4);
+    ctx.lineTo(x, cy - h * 0.4 + th);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.03, cy + h * 0.4);
+    ctx.lineTo(x + w * 0.03, cy + h * 0.4);
+    ctx.lineTo(x, cy + h * 0.4 - th);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+function _sceneFamilyWrong(ctx, ix, iy, iw, ih, rng, pal) {
+  const baseY = iy + ih * 0.82;
+  const people = 3;
+  const spacing = iw * 0.16;
+  const startX = ix + iw * 0.28;
+  for (let i = 0; i < people; i++) {
+    const x = startX + i * spacing;
+    const h2 = ih * (0.16 + (i % 2) * 0.03);
+    ctx.strokeStyle = pal.stroke;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(x, baseY - h2 - h2 * 0.22, h2 * 0.18, 0, Math.PI * 2);
+    ctx.stroke();
+    _sketchStroke(
+      ctx,
+      [
+        [x, baseY - h2],
+        [x, baseY],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1.4, jitter: 0.6 },
+    );
+    _sketchStroke(
+      ctx,
+      [
+        [x - h2 * 0.22, baseY - h2 * 0.6],
+        [x + h2 * 0.22, baseY - h2 * 0.6],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1.2, jitter: 0.6 },
+    );
+    _sketchStroke(
+      ctx,
+      [
+        [x, baseY],
+        [x - h2 * 0.18, baseY + h2 * 0.28],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1.2, jitter: 0.6 },
+    );
+    _sketchStroke(
+      ctx,
+      [
+        [x, baseY],
+        [x + h2 * 0.18, baseY + h2 * 0.28],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1.2, jitter: 0.6 },
+    );
+  }
+  const dx = startX + (rng() < 0.5 ? -1 : people) * spacing * 0.55 + spacing * 0.5;
+  const dh = ih * 0.34;
+  ctx.fillStyle = pal.fill;
+  ctx.beginPath();
+  ctx.ellipse(dx, baseY - dh * 0.92, dh * 0.09, dh * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(dx - dh * 0.12, baseY - dh * 0.8);
+  ctx.lineTo(dx - dh * 0.05, baseY);
+  ctx.lineTo(dx + dh * 0.05, baseY);
+  ctx.lineTo(dx + dh * 0.12, baseY - dh * 0.8);
+  ctx.closePath();
+  ctx.fill();
+}
+const PAINTING_SCENE_FNS = {
+  tall_figure: _sceneTallFigure,
+  crouched_figure: _sceneCrouchedFigure,
+  antler_figure: _sceneAntlerFigure,
+  hollow_eye: _sceneEye,
+  hallway: _sceneHallway,
+  moon_figure: _sceneMoonFigure,
+  hooded_figure: _sceneHoodedFigure,
+  smiley_face: _sceneSmiley,
+  symbol: _sceneSymbol,
+  tally_marks: _sceneTallyMarks,
+  handprints: _sceneHandprints,
+  spiral: _sceneSpiral,
+  mask: _sceneMask,
+  door_ajar: _sceneDoorAjar,
+  staircase: _sceneStaircase,
+  teeth: _sceneTeeth,
+  family_wrong: _sceneFamilyWrong,
+};
+function makePaintingCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = 200;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  const ink = rng() < 0.55;
+  const pal = ink
+    ? {
+        ink: true,
+        bg: 'rgb(196,188,170)',
+        stroke: 'rgba(20,15,12,0.85)',
+        fill: 'rgba(18,14,12,0.88)',
+        accent: 'rgba(40,32,26,0.4)',
+        textColor: 'rgba(25,18,14,0.85)',
+      }
+    : {
+        ink: false,
+        bg: '#f2ead6',
+        stroke: '#161311',
+        fill: '#141210',
+        accent: 'rgba(0,0,0,0.5)',
+        textColor: '#7a1414',
+      };
+  if (ink) _paperTexture(ctx, c.width, c.height, rng);
+  else _crayonPaperTexture(ctx, c.width, c.height, rng);
+  const margin = 14;
+  const ix = margin,
+    iy = margin,
+    iw = c.width - margin * 2,
+    ih = c.height - margin * 2;
+  const scene = PAINTING_SCENES[Math.floor(rng() * PAINTING_SCENES.length)];
+  const sceneFn = PAINTING_SCENE_FNS[scene] || _sceneSymbol;
+  sceneFn(ctx, ix, iy, iw, ih, rng, pal);
+  if (rng() < 0.55) {
+    const caption = CREEPY_CAPTIONS[Math.floor(rng() * CREEPY_CAPTIONS.length)];
+    const atTop = rng() < 0.5;
+    _shakyText(ctx, caption, c.width / 2, atTop ? iy + 14 : iy + ih - 10, {
+      rng,
+      size: 11 + rng() * 3,
+      color: pal.textColor,
+      maxWidth: iw - 12,
+    });
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(2, 2, c.width - 4, c.height - 4);
   return c;
 }
 function makeGrassCanvas() {
@@ -526,6 +1455,8 @@ export class MazeGame {
     this._raycaster = new THREE.Raycaster();
     this._doorLookTarget = null;
     this._lookDir = new THREE.Vector3();
+    this._torchRaycaster = new THREE.Raycaster();
+    this._torchNearFactor = 1;
     this._initThree();
     this._buildAtmosphere();
     this._bindInput();
@@ -551,6 +1482,8 @@ export class MazeGame {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.container.appendChild(this.renderer.domElement);
     this.scene.add(new THREE.HemisphereLight(0x2a2d35, 0x0a0a0c, 0.15));
     this.torch = new THREE.SpotLight(0xffc27a, 250, 35, TORCH_ANGLE, 0.3, 1.4);
@@ -911,17 +1844,53 @@ export class MazeGame {
   interact() {
     this._tryInteractDoor();
   }
-  _makeWallMaterial() {
-    const tex = new THREE.CanvasTexture(this.stoneCanvas);
+  _makeWallMaterial(canvas, opts = {}) {
+    const tex = new THREE.CanvasTexture(canvas || this.stoneCanvas);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(1.5, 1);
+    tex.repeat.set(opts.repeatX ?? 1.5, opts.repeatY ?? 1);
     tex.colorSpace = THREE.SRGBColorSpace;
     return new THREE.MeshStandardMaterial({
       map: tex,
-      roughness: 0.95,
-      metalness: 0.02,
-      color: 0xe8e9ec,
+      roughness: opts.roughness ?? 0.95,
+      metalness: opts.metalness ?? 0.02,
+      color: opts.color ?? 0xe8e9ec,
     });
+  }
+  _buildWallMaterialPalette() {
+    const rng = this.rng || Math.random;
+    return {
+      normal: this._makeWallMaterial(this.stoneCanvas),
+      eerie1: this._makeWallMaterial(makeEerieStoneCanvas(rng), {
+        roughness: 1,
+        metalness: 0,
+        color: 0x9096a0,
+        repeatX: 1.5,
+      }),
+      eerie2: this._makeWallMaterial(makeEerieStoneCanvas(rng), {
+        roughness: 1,
+        metalness: 0,
+        color: 0x7d8288,
+        repeatX: 1.2,
+      }),
+      cracked: this._makeWallMaterial(makeCrackedStoneCanvas(rng), {
+        roughness: 0.98,
+        metalness: 0.01,
+        color: 0xc9c4ba,
+        repeatX: 1.5,
+      }),
+    };
+  }
+  _pickWallMaterial() {
+    const rng = this.rng || Math.random;
+    const palette = this._wallPalette;
+    if (!palette) return this._wallMat;
+    const total = WALL_STYLE_WEIGHTS.reduce((sum, w) => sum + w.weight, 0);
+    let r = rng() * total;
+    for (const { style, weight } of WALL_STYLE_WEIGHTS) {
+      r -= weight;
+      if (r <= 0) return palette[style] || palette.normal;
+    }
+    return palette.normal;
   }
   _buildFloorMaterials() {
     const build = (canvas, opts) => {
@@ -1008,6 +1977,34 @@ export class MazeGame {
     }
     wallMesh.add(stain);
   }
+  _maybeAddPainting(wallMesh, axis) {
+    const rng = this.rng || Math.random;
+    if ((this._paintingCount || 0) >= (this._paintingCap ?? PAINTING_MAX_PER_MAZE_BASE)) return;
+    if (rng() > PAINTING_CHANCE) return;
+    const tex = new THREE.CanvasTexture(makePaintingCanvas(rng));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.7,
+      metalness: 0.05,
+    });
+    const sizeH = 0.85 + rng() * 0.55;
+    const sizeW = sizeH * (200 / 256);
+    const painting = new THREE.Mesh(new THREE.PlaneGeometry(sizeW, sizeH), mat);
+    const along = (rng() - 0.5) * (CELL - sizeW * 1.2);
+    const vertical = WALL_H * 0.12 + rng() * (WALL_H * 0.18);
+    const faceSign = rng() < 0.5 ? 1 : -1;
+    const eps = 0.135 * faceSign;
+    if (axis === 'z') {
+      painting.position.set(along, vertical, eps);
+      if (faceSign < 0) painting.rotation.y = Math.PI;
+    } else {
+      painting.position.set(eps, vertical, along);
+      painting.rotation.y = faceSign > 0 ? Math.PI / 2 : -Math.PI / 2;
+    }
+    wallMesh.add(painting);
+    this._paintingCount = (this._paintingCount || 0) + 1;
+  }
   _rebuildFloor() {
     for (const m of this.floorMeshes) {
       this.scene.remove(m);
@@ -1083,9 +2080,10 @@ export class MazeGame {
     const pts = [];
     for (let i = 0; i < segments; i++) {
       const angle = (i / segments) * Math.PI * 2;
-      const jag = 0.65 + rng() * 0.6;
-      const x = Math.cos(angle) * rx * jag;
-      let y = cy + Math.sin(angle) * ry * jag;
+      const jagX = 0.65 + rng() * 0.6;
+      const jagY = 0.92 + rng() * 0.16;
+      const x = Math.cos(angle) * rx * jagX;
+      let y = cy + Math.sin(angle) * ry * jagY;
       if (y < floorLocalY + 0.06) y = floorLocalY + rng() * 0.1;
       pts.push(new THREE.Vector2(x, y));
     }
@@ -1138,7 +2136,12 @@ export class MazeGame {
   }
   _buildMazeMeshes(grid, w, h) {
     this._clearMazeMeshes();
-    const wallMat = this._makeWallMaterial();
+    this._wallPalette = this._buildWallMaterialPalette();
+    const wallMat = this._wallPalette.normal;
+    this._paintingCount = 0;
+    this._paintingCap = Math.round(
+      PAINTING_MAX_PER_MAZE_BASE + w * h * PAINTING_MAX_PER_MAZE_PER_CELL,
+    );
     const hurdleMat = new THREE.MeshStandardMaterial({
       color: 0x3a3428,
       roughness: 0.85,
@@ -1173,13 +2176,13 @@ export class MazeGame {
     const buildWallMesh = (crawlFlag, axis, cx, cz, floorY) => {
       if (!crawlFlag) {
         const geo = axis === 'z' ? wallGeo : wallGeoV;
-        const m = new THREE.Mesh(geo, wallMat);
+        const m = new THREE.Mesh(geo, this._pickWallMaterial());
         m.position.set(cx, wallCenterY, cz);
         return m;
       }
       const floorLocalY = floorY - wallBottom;
       const geo = this._buildCrawlHoleGeometry(CELL, wallSpan, 0.25, floorLocalY, this.rng);
-      const m = new THREE.Mesh(geo, wallMat);
+      const m = new THREE.Mesh(geo, this._pickWallMaterial());
       if (axis === 'z') {
         m.position.set(cx, wallBottom, cz);
       } else {
@@ -1201,28 +2204,36 @@ export class MazeGame {
           this.scene.add(m);
           this.wallMeshes.push(m);
           if (y > 0) this._wallMeshByEdge.set(this._edgeKey(x, y - 1, 's'), m);
-          if (!cell.crawlN) this._maybeAddStain(m, 'z');
+          if (!cell.crawlN) {
+            this._maybeAddStain(m, 'z');
+            this._maybeAddPainting(m, 'z');
+          }
         }
         if (cell.w) {
           const m = buildWallMesh(cell.crawlW, 'x', cx - CELL / 2, cz, floorY);
           this.scene.add(m);
           this.wallMeshes.push(m);
           if (x > 0) this._wallMeshByEdge.set(this._edgeKey(x - 1, y, 'e'), m);
-          if (!cell.crawlW) this._maybeAddStain(m, 'x');
+          if (!cell.crawlW) {
+            this._maybeAddStain(m, 'x');
+            this._maybeAddPainting(m, 'x');
+          }
         }
         if (y === h - 1 && cell.s) {
-          const m = new THREE.Mesh(wallGeo, wallMat);
+          const m = new THREE.Mesh(wallGeo, this._pickWallMaterial());
           m.position.set(cx, wallCenterY, cz + CELL / 2);
           this.scene.add(m);
           this.wallMeshes.push(m);
           this._maybeAddStain(m, 'z');
+          this._maybeAddPainting(m, 'z');
         }
         if (x === w - 1 && cell.e) {
-          const m = new THREE.Mesh(wallGeoV, wallMat);
+          const m = new THREE.Mesh(wallGeoV, this._pickWallMaterial());
           m.position.set(cx + CELL / 2, wallCenterY, cz);
           this.scene.add(m);
           this.wallMeshes.push(m);
           this._maybeAddStain(m, 'x');
+          this._maybeAddPainting(m, 'x');
         }
         if (cell.hurdleDir) {
           const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, hurdleMat);
@@ -1899,6 +2910,21 @@ export class MazeGame {
       .copy(this.torch.position)
       .addScaledVector(this._torchForward, TORCH_THROW);
     this.torchGlow.position.copy(this.torch.position).addScaledVector(this._torchForward, 1.1);
+    this._torchRaycaster.set(this.torch.position, this._torchForward);
+    this._torchRaycaster.far = TORCH_THROW;
+    const hits = this._torchRaycaster.intersectObjects(this.wallMeshes, true);
+    const hitDist = hits.length ? hits[0].distance : Infinity;
+    let targetFactor = 1;
+    if (hitDist < TORCH_NEAR_REF_DIST) {
+      const clamped = Math.max(hitDist, 0.2);
+      targetFactor = Math.max(
+        TORCH_NEAR_MIN_FACTOR,
+        (clamped / TORCH_NEAR_REF_DIST) * (clamped / TORCH_NEAR_REF_DIST),
+      );
+    }
+    this._torchNearFactor += (targetFactor - this._torchNearFactor) * t;
+    this.torch.intensity *= this._torchNearFactor;
+    this.torchGlow.intensity *= this._torchNearFactor;
   }
   _easeOutCubic(t) {
     return 1 - Math.pow(1 - t, 3);
@@ -2156,12 +3182,14 @@ export class MazeGame {
       if (this._wallMeshByEdge.has(key) || !this._wallGeo || !this._wallGeoV) return;
       const { geo } = this._wallEdgeTransform(change.x, change.y, change.dir);
       const startY = this._wallBottom - this._wallSpan / 2 - 0.4;
-      const m = new THREE.Mesh(geo, this._wallMat);
+      const m = new THREE.Mesh(geo, this._pickWallMaterial());
       m.position.set(px, startY, pz);
       this.scene.add(m);
       this.wallMeshes.push(m);
       this._wallMeshByEdge.set(key, m);
-      this._maybeAddStain(m, change.dir === 'e' ? 'x' : 'z');
+      const shiftAxis = change.dir === 'e' ? 'x' : 'z';
+      this._maybeAddStain(m, shiftAxis);
+      this._maybeAddPainting(m, shiftAxis);
       this._wallAnims.push({
         mesh: m,
         kind: 'rise',
