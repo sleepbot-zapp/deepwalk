@@ -11,6 +11,8 @@ import {
   pickAnchors,
   assignElevations,
   assignObstacles,
+  assignDoors,
+  assignRooms,
   pickMazeShift,
 } from './maze.js';
 import { AmbientAudio } from './AmbientAudio.js';
@@ -84,6 +86,21 @@ const DOOR_LOOK_DIST = 3.2;
 const DOOR_AUTO_CLOSE_DELAY = 6.5;
 const DOOR_LEAVE_DIST = 3.6;
 const DOOR_ENTER_RADIUS = 1.1;
+// Shortcut/room doors: real, human-sized doors (not the full cell-wide exit
+// portals above) cut into walls purely as optional shortcuts. Opened/closed
+// by left click from either side.
+const SHORTCUT_DOOR_WIDTH = 0.98;
+const SHORTCUT_DOOR_HEIGHT = 2.05;
+const SHORTCUT_DOOR_THICKNESS = 0.06;
+const SHORTCUT_DOOR_OPEN_ANGLE = Math.PI * 0.72;
+const SHORTCUT_DOOR_OPEN_DURATION = 0.6;
+const SHORTCUT_DOOR_CLOSE_DURATION = 0.45;
+const SHORTCUT_DOOR_INTERACT_DIST = 2.4;
+const SHORTCUT_DOOR_LOOK_DIST = 3.0;
+const SHORTCUT_DOOR_SEAL = 0.035; // leaf overlaps the wall opening by this much on all
+// sides so there's no coplanar seam between the door leaf and the wall's cut edge
+// (a from-scratch match would leave a hairline gap that flickers in and out at
+// grazing view angles).
 const ENTRANCE_YAW_FOR_WALL = {
   n: Math.PI,
   s: 0,
@@ -1208,6 +1225,41 @@ function makePortalCanvas(rng = Math.random) {
   ctx.fill();
   return c;
 }
+function makeDoorWoodCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 512;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#3c2a1c';
+  ctx.fillRect(0, 0, 256, 512);
+  for (let i = 0; i < 5000; i++) {
+    const g = 25 + rng() * 45;
+    ctx.fillStyle = `rgba(${g + 45},${g + 24},${g + 10},${(0.04 + rng() * 0.09).toFixed(2)})`;
+    const w = 1 + rng() * 2;
+    const h = 5 + rng() * 34;
+    ctx.fillRect(rng() * 256, rng() * 512, w, h);
+  }
+  for (let i = 1; i < 4; i++) {
+    const x = (256 / 4) * i;
+    ctx.strokeStyle = 'rgba(14,9,6,0.4)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 512);
+    ctx.stroke();
+  }
+  const drawPanel = (px, py, pw, ph) => {
+    ctx.strokeStyle = 'rgba(10,6,4,0.55)';
+    ctx.lineWidth = 7;
+    ctx.strokeRect(px, py, pw, ph);
+    ctx.strokeStyle = 'rgba(90,62,38,0.35)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 7, py + 7, pw - 14, ph - 14);
+  };
+  drawPanel(26, 32, 204, 232);
+  drawPanel(26, 300, 204, 178);
+  return c;
+}
 function makeMistCanvas() {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
@@ -1452,6 +1504,9 @@ export class MazeGame {
     this.exits = [];
     this.doors = [];
     this.entranceDoor = null;
+    this.shortcutDoors = [];
+    this._shortcutDoorByEdge = new Map();
+    this._shortcutDoorLookTarget = null;
     this._raycaster = new THREE.Raycaster();
     this._doorLookTarget = null;
     this._lookDir = new THREE.Vector3();
@@ -1946,6 +2001,12 @@ export class MazeGame {
     this.entranceDoor = null;
     this._doorLookTarget = null;
     if (this.callbacks.onDoorLookAt) this.callbacks.onDoorLookAt(null);
+    if (this.shortcutDoors) {
+      for (const d of this.shortcutDoors) this.scene.remove(d.group);
+    }
+    this.shortcutDoors = [];
+    this._shortcutDoorByEdge = new Map();
+    this._shortcutDoorLookTarget = null;
     if (this.ceilMesh) this.scene.remove(this.ceilMesh);
   }
   _maybeAddStain(wallMesh, axis) {
@@ -2137,6 +2198,130 @@ export class MazeGame {
     m.receiveShadow = true;
     return m;
   }
+  _buildShortcutHoleGeometry(spanHeight, depth, floorLocalY) {
+    const width = CELL;
+    const shape = new THREE.Shape();
+    shape.moveTo(-width / 2, 0);
+    shape.lineTo(width / 2, 0);
+    shape.lineTo(width / 2, spanHeight);
+    shape.lineTo(-width / 2, spanHeight);
+    shape.lineTo(-width / 2, 0);
+    const holeW = SHORTCUT_DOOR_WIDTH;
+    const holeH = SHORTCUT_DOOR_HEIGHT;
+    const hole = new THREE.Path();
+    hole.moveTo(-holeW / 2, floorLocalY);
+    hole.lineTo(holeW / 2, floorLocalY);
+    hole.lineTo(holeW / 2, floorLocalY + holeH);
+    hole.lineTo(-holeW / 2, floorLocalY + holeH);
+    hole.lineTo(-holeW / 2, floorLocalY);
+    shape.holes.push(hole);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      bevelEnabled: false,
+      curveSegments: 1,
+    });
+    geo.translate(0, 0, -depth / 2);
+    return geo;
+  }
+  _shortcutDoorMaterials() {
+    if (!this._shortcutDoorWoodMat) {
+      const tex = new THREE.CanvasTexture(makeDoorWoodCanvas(this.rng || Math.random));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this._shortcutDoorWoodMat = new THREE.MeshStandardMaterial({
+        map: tex,
+        roughness: 0.78,
+        metalness: 0.06,
+      });
+    }
+    if (!this._shortcutDoorHandleMat) {
+      this._shortcutDoorHandleMat = new THREE.MeshStandardMaterial({
+        color: 0x2b2b2e,
+        roughness: 0.35,
+        metalness: 0.75,
+      });
+    }
+    return {
+      woodMat: this._shortcutDoorWoodMat,
+      handleMat: this._shortcutDoorHandleMat,
+    };
+  }
+  _buildShortcutDoorGroup(axis, cx, cz, floorY) {
+    const { woodMat, handleMat } = this._shortcutDoorMaterials();
+    const group = new THREE.Group();
+    group.position.set(cx, floorY, cz);
+    if (axis === 'x') group.rotation.y = Math.PI / 2;
+
+    const pivot = new THREE.Group();
+    pivot.position.set(-SHORTCUT_DOOR_WIDTH / 2, 0, 0);
+    const leafW = SHORTCUT_DOOR_WIDTH + SHORTCUT_DOOR_SEAL * 2;
+    const leafH = SHORTCUT_DOOR_HEIGHT + SHORTCUT_DOOR_SEAL;
+    const leaf = new THREE.Mesh(
+      new THREE.BoxGeometry(leafW, leafH, SHORTCUT_DOOR_THICKNESS),
+      woodMat,
+    );
+    leaf.position.set(SHORTCUT_DOOR_WIDTH / 2, leafH / 2, 0);
+    leaf.castShadow = true;
+    leaf.receiveShadow = true;
+    pivot.add(leaf);
+    const handleGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.16, 8);
+    const handleA = new THREE.Mesh(handleGeo, handleMat);
+    handleA.rotation.z = Math.PI / 2;
+    handleA.position.set(
+      SHORTCUT_DOOR_WIDTH - 0.12,
+      SHORTCUT_DOOR_HEIGHT * 0.48,
+      SHORTCUT_DOOR_THICKNESS / 2 + 0.04,
+    );
+    const handleB = handleA.clone();
+    handleB.position.z = -(SHORTCUT_DOOR_THICKNESS / 2 + 0.04);
+    pivot.add(handleA, handleB);
+    group.add(pivot);
+    return {
+      group,
+      pivot,
+      leaf,
+    };
+  }
+  _buildShortcutDoorAt(x, y, nx, ny, dir, opp, axis, cx, cz, floorY, startOpen) {
+    const wallBottom = this._wallBottom ?? -0.2;
+    const wallSpan = this._wallSpan ?? WALL_H + 0.1;
+    const floorLocalY = floorY - wallBottom;
+    const holeGeo = this._buildShortcutHoleGeometry(wallSpan, 0.25, floorLocalY);
+    const wallMesh = new THREE.Mesh(holeGeo, this._pickWallMaterial());
+    if (axis === 'z') {
+      wallMesh.position.set(cx, wallBottom, cz);
+    } else {
+      wallMesh.rotation.y = Math.PI / 2;
+      wallMesh.position.set(cx, wallBottom, cz);
+    }
+    wallMesh.receiveShadow = true;
+    this.scene.add(wallMesh);
+    this.wallMeshes.push(wallMesh);
+
+    const { group, pivot, leaf } = this._buildShortcutDoorGroup(axis, cx, cz, floorY);
+    this.scene.add(group);
+
+    const doorMeta = {
+      x,
+      y,
+      nx,
+      ny,
+      dir,
+      opp,
+      axis,
+      group,
+      pivot,
+      leaf,
+      worldX: cx,
+      worldZ: cz,
+      doorState: startOpen ? 'open' : 'closed',
+      animT: startOpen ? 1 : 0,
+      openSign: 1,
+    };
+    pivot.rotation.y = startOpen ? SHORTCUT_DOOR_OPEN_ANGLE * doorMeta.openSign : 0;
+    this.shortcutDoors.push(doorMeta);
+    this._shortcutDoorByEdge.set(this._edgeKey(x, y, dir), doorMeta);
+    this._shortcutDoorByEdge.set(this._edgeKey(nx, ny, opp), doorMeta);
+  }
   _buildMazeMeshes(grid, w, h) {
     this._clearMazeMeshes();
     this._wallPalette = this._buildWallMaterialPalette();
@@ -2203,23 +2388,55 @@ export class MazeGame {
         const cz = originZ + y * CELL + CELL / 2;
         const floorY = (cell.elevation || 0) * STEP_HEIGHT;
         if (cell.n) {
-          const m = buildWallMesh(cell.crawlN, 'z', cx, cz - CELL / 2, floorY);
-          this.scene.add(m);
-          this.wallMeshes.push(m);
-          if (y > 0) this._wallMeshByEdge.set(this._edgeKey(x, y - 1, 's'), m);
-          if (!cell.crawlN) {
-            this._maybeAddStain(m, 'z');
-            this._maybeAddPainting(m, 'z');
+          if (cell.doorN) {
+            this._buildShortcutDoorAt(
+              x,
+              y,
+              x,
+              y - 1,
+              'n',
+              's',
+              'z',
+              cx,
+              cz - CELL / 2,
+              floorY,
+              !!cell.doorOpenN,
+            );
+          } else {
+            const m = buildWallMesh(cell.crawlN, 'z', cx, cz - CELL / 2, floorY);
+            this.scene.add(m);
+            this.wallMeshes.push(m);
+            if (y > 0) this._wallMeshByEdge.set(this._edgeKey(x, y - 1, 's'), m);
+            if (!cell.crawlN) {
+              this._maybeAddStain(m, 'z');
+              this._maybeAddPainting(m, 'z');
+            }
           }
         }
         if (cell.w) {
-          const m = buildWallMesh(cell.crawlW, 'x', cx - CELL / 2, cz, floorY);
-          this.scene.add(m);
-          this.wallMeshes.push(m);
-          if (x > 0) this._wallMeshByEdge.set(this._edgeKey(x - 1, y, 'e'), m);
-          if (!cell.crawlW) {
-            this._maybeAddStain(m, 'x');
-            this._maybeAddPainting(m, 'x');
+          if (cell.doorW) {
+            this._buildShortcutDoorAt(
+              x,
+              y,
+              x - 1,
+              y,
+              'w',
+              'e',
+              'x',
+              cx - CELL / 2,
+              cz,
+              floorY,
+              !!cell.doorOpenW,
+            );
+          } else {
+            const m = buildWallMesh(cell.crawlW, 'x', cx - CELL / 2, cz, floorY);
+            this.scene.add(m);
+            this.wallMeshes.push(m);
+            if (x > 0) this._wallMeshByEdge.set(this._edgeKey(x - 1, y, 'e'), m);
+            if (!cell.crawlW) {
+              this._maybeAddStain(m, 'x');
+              this._maybeAddPainting(m, 'x');
+            }
           }
         }
         if (y === h - 1 && cell.s) {
@@ -2257,6 +2474,9 @@ export class MazeGame {
   }
   _edgeKey(x, y, dir) {
     return `${x},${y},${dir}`;
+  }
+  _shortcutDoorAt(cx, cy, dir) {
+    return this._shortcutDoorByEdge.get(this._edgeKey(cx, cy, dir)) || null;
   }
   _cellCenter(cx, cy) {
     return {
@@ -2476,12 +2696,22 @@ export class MazeGame {
     this.maze = generateMaze(w, h, this.rng);
     assignElevations(this.maze, w, h, 0, 0, this.rng);
     assignObstacles(this.maze, w, h, 0, 0, this.rng);
+    assignDoors(this.maze, w, h, this.rng);
     this.surfaceMap = generateSurfaceMap(w, h, this.rng);
     const exitCells = pickExits(this.maze, w, h, 0, 0, this.rng);
     this.exits = exitCells.map((e, i) => ({
       ...e,
       letter: EXIT_LETTERS[i] || String(i + 1),
     }));
+    assignRooms(this.maze, w, h, this.rng, {
+      avoidCells: [[0, 0], ...this.exits.map((e) => [e.x, e.y])],
+    });
+    this._roomCells = [];
+    for (let ry = 0; ry < h; ry++) {
+      for (let rx = 0; rx < w; rx++) {
+        if (this.maze[ry][rx].roomId != null) this._roomCells.push([rx, ry]);
+      }
+    }
     this.discoveredExits = new Set();
     const origin = this._buildMazeMeshes(this.maze, w, h);
     this.mazeOrigin = origin;
@@ -2795,10 +3025,23 @@ export class MazeGame {
     const throughS = cell.crawlS && this.crouching && Math.abs(localX - CELL / 2) < holeHalf;
     const throughW = cell.crawlW && this.crouching && Math.abs(localZ - CELL / 2) < holeHalf;
     const throughE = cell.crawlE && this.crouching && Math.abs(localZ - CELL / 2) < holeHalf;
-    if (cell.n && !throughN && localZ - r < 0.13) return false;
-    if (cell.s && !throughS && localZ + r > CELL - 0.13) return false;
-    if (cell.w && !throughW && localX - r < 0.13) return false;
-    if (cell.e && !throughE && localX + r > CELL - 0.13) return false;
+    const doorHalf = SHORTCUT_DOOR_WIDTH / 2;
+    const doorN = cell.doorN ? this._shortcutDoorAt(cx, cy, 'n') : null;
+    const doorS = cell.doorS ? this._shortcutDoorAt(cx, cy, 's') : null;
+    const doorW = cell.doorW ? this._shortcutDoorAt(cx, cy, 'w') : null;
+    const doorE = cell.doorE ? this._shortcutDoorAt(cx, cy, 'e') : null;
+    const throughDoorN =
+      doorN && doorN.doorState !== 'closed' && Math.abs(localX - CELL / 2) < doorHalf;
+    const throughDoorS =
+      doorS && doorS.doorState !== 'closed' && Math.abs(localX - CELL / 2) < doorHalf;
+    const throughDoorW =
+      doorW && doorW.doorState !== 'closed' && Math.abs(localZ - CELL / 2) < doorHalf;
+    const throughDoorE =
+      doorE && doorE.doorState !== 'closed' && Math.abs(localZ - CELL / 2) < doorHalf;
+    if (cell.n && !throughN && !throughDoorN && localZ - r < 0.13) return false;
+    if (cell.s && !throughS && !throughDoorS && localZ + r > CELL - 0.13) return false;
+    if (cell.w && !throughW && !throughDoorW && localX - r < 0.13) return false;
+    if (cell.e && !throughE && !throughDoorE && localX + r > CELL - 0.13) return false;
     if (this.verticalOffset < HURDLE_CLEAR_HEIGHT) {
       if (this._hurdleAt(cx, cy, 'n') && localZ - r < 0.13) return false;
       if (this._hurdleAt(cx, cy, 's') && localZ + r > CELL - 0.13) return false;
@@ -2952,6 +3195,11 @@ export class MazeGame {
       this._setDoorLook(null);
       return;
     }
+    const wallHits = this._raycaster.intersectObjects(this.wallMeshes, true);
+    if (wallHits.length && wallHits[0].distance < hits[0].distance - 0.05) {
+      this._setDoorLook(null);
+      return;
+    }
     let obj = hits[0].object;
     while (obj && !obj.userData.exitLetter) obj = obj.parent;
     const letter = obj ? obj.userData.exitLetter : null;
@@ -2959,7 +3207,74 @@ export class MazeGame {
   }
   _tryInteractDoor() {
     if (!this.running) return;
-    this._openDoor(this._doorLookTarget);
+    if (this._doorLookTarget) {
+      this._openDoor(this._doorLookTarget);
+      return;
+    }
+    if (this._shortcutDoorLookTarget) {
+      this._toggleShortcutDoor(this._shortcutDoorLookTarget);
+    }
+  }
+  _updateShortcutDoorLook() {
+    if (
+      !this.shortcutDoors ||
+      !this.shortcutDoors.length ||
+      document.pointerLockElement !== this.renderer.domElement
+    ) {
+      this._shortcutDoorLookTarget = null;
+      return;
+    }
+    const leaves = this.shortcutDoors.map((d) => d.leaf);
+    this.camera.getWorldDirection(this._lookDir);
+    this._raycaster.set(this.camera.position, this._lookDir);
+    this._raycaster.far = SHORTCUT_DOOR_LOOK_DIST;
+    const hits = this._raycaster.intersectObjects(leaves, true);
+    if (!hits.length) {
+      this._shortcutDoorLookTarget = null;
+      return;
+    }
+    const wallHits = this._raycaster.intersectObjects(this.wallMeshes, true);
+    if (wallHits.length && wallHits[0].distance < hits[0].distance - 0.05) {
+      this._shortcutDoorLookTarget = null;
+      return;
+    }
+    this._shortcutDoorLookTarget = this.shortcutDoors.find((d) => d.leaf === hits[0].object) || null;
+  }
+  // Toggled from left click (or E) from either side - a closed door opens,
+  // an open door closes, and clicking mid-swing simply reverses it. The
+  // swing direction is decided fresh each time a door starts opening, based
+  // on which side of the wall the player is standing on, so the leaf always
+  // swings away from whoever opened it instead of always opening into one
+  // fixed room.
+  _toggleShortcutDoor(door) {
+    if (!door) return;
+    const dist = Math.hypot(this.player.x - door.worldX, this.player.z - door.worldZ);
+    if (dist > SHORTCUT_DOOR_INTERACT_DIST) return;
+    if (door.doorState === 'closed' || door.doorState === 'closing') {
+      const local = door.group.worldToLocal(
+        new THREE.Vector3(this.player.x, door.group.position.y, this.player.z),
+      );
+      door.openSign = local.z >= 0 ? 1 : -1;
+      door.doorState = 'opening';
+      this._playDoorCreak(false);
+    } else if (door.doorState === 'open' || door.doorState === 'opening') {
+      door.doorState = 'closing';
+      this._playDoorCreak(true);
+    }
+  }
+  _updateShortcutDoors(dt) {
+    if (!this.shortcutDoors || !this.shortcutDoors.length) return;
+    for (const door of this.shortcutDoors) {
+      if (door.doorState === 'opening') {
+        door.animT = Math.min(1, door.animT + dt / SHORTCUT_DOOR_OPEN_DURATION);
+        door.pivot.rotation.y = this._easeOutCubic(door.animT) * SHORTCUT_DOOR_OPEN_ANGLE * door.openSign;
+        if (door.animT >= 1) door.doorState = 'open';
+      } else if (door.doorState === 'closing') {
+        door.animT = Math.max(0, door.animT - dt / SHORTCUT_DOOR_CLOSE_DURATION);
+        door.pivot.rotation.y = this._easeOutCubic(door.animT) * SHORTCUT_DOOR_OPEN_ANGLE * door.openSign;
+        if (door.animT <= 0) door.doorState = 'closed';
+      }
+    }
   }
   _openDoor(exit) {
     if (!exit || exit.doorState !== 'closed') return;
@@ -3123,6 +3438,7 @@ export class MazeGame {
     }
     if (this.exits) for (const exit of this.exits) cells.push([exit.x, exit.y]);
     if (this._spawnCell) cells.push(this._spawnCell);
+    if (this._roomCells) cells.push(...this._roomCells);
     return cells;
   }
   _triggerMazeShift() {
@@ -3363,6 +3679,8 @@ export class MazeGame {
       this._updateBattery(dt);
       this._updateDoorLook();
       this._updateDoors(dt);
+      this._updateShortcutDoorLook();
+      this._updateShortcutDoors(dt);
       this._updateMazeShift(dt);
       this.elapsed += dt;
       if (this.callbacks.onTime) this.callbacks.onTime(this.elapsed);
