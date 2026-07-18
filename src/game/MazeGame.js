@@ -11,6 +11,7 @@ import {
   pickAnchors,
   assignElevations,
   assignObstacles,
+  pickMazeShift,
 } from './maze.js';
 import { AmbientAudio } from './AmbientAudio.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -89,6 +90,11 @@ const ENTRANCE_YAW_FOR_WALL = {
 };
 const GAME_KEYS = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 const ANCHOR_POOL_SIZE = EXIT_LETTERS.length;
+const WALL_SHIFT_MIN_DELAY = 18;
+const WALL_SHIFT_MAX_DELAY = 32;
+const WALL_RISE_DURATION = 1.1;
+const WALL_SINK_DURATION = 0.85;
+const WALL_SHIFT_PROTECT_RADIUS = 1;
 const SURFACE_TYPES = ['stone', 'grass', 'mud', 'water'];
 const STAIN_TYPES = ['blood', 'mud', 'damp'];
 const STAIN_CHANCE = 0.45;
@@ -481,6 +487,9 @@ export class MazeGame {
     };
     this.wallMeshes = [];
     this.floorMeshes = [];
+    this._wallMeshByEdge = new Map();
+    this._wallAnims = [];
+    this._nextShiftIn = null;
     this.stoneCanvas = makeStoneCanvas();
     this._floorMaterials = this._buildFloorMaterials();
     this.audio = new AmbientAudio();
@@ -928,6 +937,9 @@ export class MazeGame {
   _clearMazeMeshes() {
     for (const m of this.wallMeshes) this.scene.remove(m);
     this.wallMeshes = [];
+    this._wallMeshByEdge.clear();
+    this._wallAnims = [];
+    this._nextShiftIn = null;
     for (const m of this.floorMeshes) this.scene.remove(m);
     this.floorMeshes = [];
     if (this.doors) {
@@ -1120,6 +1132,8 @@ export class MazeGame {
     this._wallMat = wallMat;
     const wallGeo = new THREE.BoxGeometry(CELL, wallSpan, 0.25);
     const wallGeoV = new THREE.BoxGeometry(0.25, wallSpan, CELL);
+    this._wallGeo = wallGeo;
+    this._wallGeoV = wallGeoV;
     const buildWallMesh = (crawlFlag, axis, cx, cz, floorY) => {
       if (!crawlFlag) {
         const geo = axis === 'z' ? wallGeo : wallGeoV;
@@ -1150,12 +1164,14 @@ export class MazeGame {
           const m = buildWallMesh(cell.crawlN, 'z', cx, cz - CELL / 2, floorY);
           this.scene.add(m);
           this.wallMeshes.push(m);
+          if (y > 0) this._wallMeshByEdge.set(this._edgeKey(x, y - 1, 's'), m);
           if (!cell.crawlN) this._maybeAddStain(m, 'z');
         }
         if (cell.w) {
           const m = buildWallMesh(cell.crawlW, 'x', cx - CELL / 2, cz, floorY);
           this.scene.add(m);
           this.wallMeshes.push(m);
+          if (x > 0) this._wallMeshByEdge.set(this._edgeKey(x - 1, y, 'e'), m);
           if (!cell.crawlW) this._maybeAddStain(m, 'x');
         }
         if (y === h - 1 && cell.s) {
@@ -1188,6 +1204,9 @@ export class MazeGame {
       x: originX,
       z: originZ,
     };
+  }
+  _edgeKey(x, y, dir) {
+    return `${x},${y},${dir}`;
   }
   _cellCenter(cx, cy) {
     return {
@@ -1438,6 +1457,8 @@ export class MazeGame {
       entranceWallDir = this._pickEntranceWallDir(spawnX, spawnY);
       if (entranceWallDir) this._buildEntranceDoor(spawnX, spawnY, entranceWallDir);
     }
+    this._spawnCell = [spawnX, spawnY];
+    this._nextShiftIn = null;
     const start = this._cellCenter(spawnX, spawnY);
     this.player.x = start.x;
     this.player.z = start.z;
@@ -2015,6 +2036,109 @@ export class MazeGame {
     src.start(now);
     src.stop(now + dur);
   }
+  _scheduleNextShift() {
+    const span = WALL_SHIFT_MAX_DELAY - WALL_SHIFT_MIN_DELAY;
+    this._nextShiftIn = WALL_SHIFT_MIN_DELAY + (this.rng ? this.rng() : Math.random()) * span;
+  }
+  _updateMazeShift(dt) {
+    this._updateWallAnimations(dt);
+    if (this._nextShiftIn === null) {
+      this._scheduleNextShift();
+      return;
+    }
+    this._nextShiftIn -= dt;
+    if (this._nextShiftIn <= 0) {
+      this._triggerMazeShift();
+      this._scheduleNextShift();
+    }
+  }
+  _shiftProtectedCells() {
+    const cells = [];
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
+    for (let dy = -WALL_SHIFT_PROTECT_RADIUS; dy <= WALL_SHIFT_PROTECT_RADIUS; dy++) {
+      for (let dx = -WALL_SHIFT_PROTECT_RADIUS; dx <= WALL_SHIFT_PROTECT_RADIUS; dx++) {
+        cells.push([cx + dx, cy + dy]);
+      }
+    }
+    if (this.exits) for (const exit of this.exits) cells.push([exit.x, exit.y]);
+    if (this._spawnCell) cells.push(this._spawnCell);
+    return cells;
+  }
+  _triggerMazeShift() {
+    if (!this.maze || !this.mazeW || !this.mazeH) return;
+    const changes = pickMazeShift(this.maze, this.mazeW, this.mazeH, {
+      rng: this.rng || Math.random,
+      fallCount: 2,
+      riseCount: 2,
+      protectedCells: this._shiftProtectedCells(),
+    });
+    if (!changes || !changes.length) return;
+    for (const change of changes) this._animateWallChange(change);
+    if (this.callbacks.onMazeShift) this.callbacks.onMazeShift(changes);
+  }
+  _wallEdgeTransform(x, y, dir) {
+    const cx = this.mazeOrigin.x + x * CELL + CELL / 2;
+    const cz = this.mazeOrigin.z + y * CELL + CELL / 2;
+    if (dir === 'e') {
+      return { geo: this._wallGeoV, px: cx + CELL / 2, pz: cz };
+    }
+    return { geo: this._wallGeo, px: cx, pz: cz + CELL / 2 };
+  }
+  _animateWallChange(change) {
+    const key = this._edgeKey(change.x, change.y, change.dir);
+    if (change.type === 'fall') {
+      const mesh = this._wallMeshByEdge.get(key);
+      if (!mesh) return;
+      this._wallMeshByEdge.delete(key);
+      this._wallAnims.push({
+        mesh,
+        kind: 'sink',
+        elapsed: 0,
+        duration: WALL_SINK_DURATION,
+        startY: mesh.position.y,
+        endY: this._wallBottom - this._wallSpan / 2 - 0.4,
+      });
+    } else if (change.type === 'rise') {
+      if (this._wallMeshByEdge.has(key) || !this._wallGeo || !this._wallGeoV) return;
+      const { geo, px, pz } = this._wallEdgeTransform(change.x, change.y, change.dir);
+      const startY = this._wallBottom - this._wallSpan / 2 - 0.4;
+      const m = new THREE.Mesh(geo, this._wallMat);
+      m.position.set(px, startY, pz);
+      this.scene.add(m);
+      this.wallMeshes.push(m);
+      this._wallMeshByEdge.set(key, m);
+      this._maybeAddStain(m, change.dir === 'e' ? 'x' : 'z');
+      this._wallAnims.push({
+        mesh: m,
+        kind: 'rise',
+        elapsed: 0,
+        duration: WALL_RISE_DURATION,
+        startY,
+        endY: this._wallCenterY,
+      });
+    }
+  }
+  _updateWallAnimations(dt) {
+    if (!this._wallAnims.length) return;
+    for (let i = this._wallAnims.length - 1; i >= 0; i--) {
+      const anim = this._wallAnims[i];
+      anim.elapsed += dt;
+      const t = Math.min(1, anim.elapsed / anim.duration);
+      const eased = anim.kind === 'rise' ? this._easeOutCubic(t) : t * t * t;
+      anim.mesh.position.y = anim.startY + (anim.endY - anim.startY) * eased;
+      if (t >= 1) {
+        if (anim.kind === 'sink') {
+          this.scene.remove(anim.mesh);
+          const idx = this.wallMeshes.indexOf(anim.mesh);
+          if (idx >= 0) this.wallMeshes.splice(idx, 1);
+          if (anim.mesh.geometry !== this._wallGeo && anim.mesh.geometry !== this._wallGeoV) {
+            anim.mesh.geometry.dispose();
+          }
+        }
+        this._wallAnims.splice(i, 1);
+      }
+    }
+  }
   descend(letter) {
     if (!this.discoveredExits || !this.discoveredExits.has(letter)) return false;
     const fromLevel = this.level;
@@ -2037,6 +2161,7 @@ export class MazeGame {
       this._updateBattery(dt);
       this._updateDoorLook();
       this._updateDoors(dt);
+      this._updateMazeShift(dt);
       this.elapsed += dt;
       if (this.callbacks.onTime) this.callbacks.onTime(this.elapsed);
       const rawProgress = this._computeProgress();

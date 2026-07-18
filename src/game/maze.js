@@ -400,6 +400,116 @@ export function pickAnchors(grid, w, h, exits, rng, count) {
   return accepted;
 }
 
+const SHIFT_DIRS = {
+  n: { dx: 0, dy: -1, opp: 's' },
+  s: { dx: 0, dy: 1, opp: 'n' },
+  e: { dx: 1, dy: 0, opp: 'w' },
+  w: { dx: -1, dy: 0, opp: 'e' },
+};
+
+function inBounds(x, y, w, h) {
+  return x >= 0 && x < w && y >= 0 && y < h;
+}
+
+function setWall(grid, w, h, x, y, dir, present) {
+  const d = SHIFT_DIRS[dir];
+  const nx = x + d.dx;
+  const ny = y + d.dy;
+  grid[y][x][dir] = present;
+  if (inBounds(nx, ny, w, h)) {
+    grid[ny][nx][d.opp] = present;
+  }
+}
+
+function listInteriorEdges(w, h) {
+  const edges = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x + 1 < w) edges.push({ x, y, dir: 'e', nx: x + 1, ny: y });
+      if (y + 1 < h) edges.push({ x, y, dir: 's', nx: x, ny: y + 1 });
+    }
+  }
+  return edges;
+}
+
+function edgeTouchesProtected(edge, protectedSet) {
+  return protectedSet.has(edge.y * 100000 + edge.x) || protectedSet.has(edge.ny * 100000 + edge.nx);
+}
+
+function isBridgeEdge(grid, w, h, edge) {
+  const startKey = edge.y * 100000 + edge.x;
+  const targetKey = edge.ny * 100000 + edge.nx;
+  const visited = new Set([startKey]);
+  const queue = [[edge.x, edge.y]];
+
+  while (queue.length) {
+    const [x, y] = queue.shift();
+    const cell = grid[y][x];
+    for (const key of ['n', 's', 'e', 'w']) {
+      if (cell[key]) continue;
+      const d = SHIFT_DIRS[key];
+      const nx = x + d.dx;
+      const ny = y + d.dy;
+      if (!inBounds(nx, ny, w, h)) continue;
+      const isTheEdgeItself =
+        (x === edge.x && y === edge.y && nx === edge.nx && ny === edge.ny) ||
+        (x === edge.nx && y === edge.ny && nx === edge.x && ny === edge.y);
+      if (isTheEdgeItself) continue;
+      const k = ny * 100000 + nx;
+      if (!visited.has(k)) {
+        visited.add(k);
+        queue.push([nx, ny]);
+      }
+    }
+  }
+
+  return !visited.has(targetKey);
+}
+
+function shuffleInPlace(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+export function pickMazeShift(grid, w, h, opts = {}) {
+  const rng = opts.rng ?? Math.random;
+  const fallCount = opts.fallCount ?? 2;
+  const riseCount = opts.riseCount ?? 2;
+  const protectedCells = opts.protectedCells ?? [];
+
+  const protectedSet = new Set(protectedCells.map(([px, py]) => py * 100000 + px));
+  const edges = listInteriorEdges(w, h);
+
+  const closedCandidates = shuffleInPlace(
+    edges.filter((e) => grid[e.y][e.x][e.dir] && !edgeTouchesProtected(e, protectedSet)),
+    rng,
+  );
+  const openCandidates = shuffleInPlace(
+    edges.filter((e) => !grid[e.y][e.x][e.dir] && !edgeTouchesProtected(e, protectedSet)),
+    rng,
+  );
+
+  const changes = [];
+
+  for (const edge of closedCandidates) {
+    if (changes.filter((c) => c.type === 'fall').length >= fallCount) break;
+    setWall(grid, w, h, edge.x, edge.y, edge.dir, false);
+    changes.push({ type: 'fall', x: edge.x, y: edge.y, dir: edge.dir, nx: edge.nx, ny: edge.ny });
+  }
+
+  for (const edge of openCandidates) {
+    if (changes.filter((c) => c.type === 'rise').length >= riseCount) break;
+    if (isBridgeEdge(grid, w, h, edge)) continue;
+    setWall(grid, w, h, edge.x, edge.y, edge.dir, true);
+    changes.push({ type: 'rise', x: edge.x, y: edge.y, dir: edge.dir, nx: edge.nx, ny: edge.ny });
+  }
+
+  return changes;
+}
+
 export function generateSurfaceMap(w, h, rng = Math.random) {
   const map = Array.from({ length: h }, () => Array(w).fill('stone'));
   const cellCount = w * h;
