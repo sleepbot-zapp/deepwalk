@@ -3,6 +3,8 @@ import React, { useRef, useState, useCallback } from 'react';
 const JOYSTICK_RADIUS = 58; 
 
 export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChange }) {
+  const prompt =
+    doorPrompt && typeof doorPrompt === 'object' ? doorPrompt : doorPrompt ? { label: 'OPEN' } : null;
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
   const stickBaseRef = useRef(null);
   const stickPointerId = useRef(null);
@@ -127,13 +129,15 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
       </div>
 
       <div className="touch-action-buttons">
-        {doorPrompt && (
+        {prompt && (
           <button
             type="button"
-            className="touch-btn touch-btn-interact"
+            className={`touch-btn touch-btn-interact ${
+              prompt.label === 'CLOSE' ? 'touch-btn-interact-close' : 'touch-btn-interact-open'
+            }`}
             onPointerDown={onInteractDown}
           >
-            OPEN
+            {prompt.label}
           </button>
         )}
         <button

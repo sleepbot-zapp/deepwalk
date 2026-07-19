@@ -35,10 +35,11 @@ const JUMP_SPEED = 5.6;
 const CROUCH_JUMP_MULT = 0.3;
 const GRAVITY = 15.5;
 const HURDLE_HEIGHT = 0.6;
-const HURDLE_CLEAR_HEIGHT = 0.55;
 const HURDLE_DEPTH = 0.3;
 const CRAWL_OPENING_HEIGHT = 1.25;
 const CRAWL_OPENING_WIDTH = CELL * 0.55;
+const CRAWL_PASS_MIN_WIDTH = COLLIDE_RADIUS * 2 + 0.15;
+const CRAWL_PASS_MAX_WIDTH = Math.min(CRAWL_OPENING_WIDTH * 0.75, CRAWL_PASS_MIN_WIDTH + 0.6);
 const FURNITURE_COLLIDE_RADIUS = {
   bed: 1.0,
   cupboard: 0.55,
@@ -105,6 +106,7 @@ const SHORTCUT_DOOR_CLOSE_DURATION = 0.45;
 const SHORTCUT_DOOR_INTERACT_DIST = 2.4;
 const SHORTCUT_DOOR_LOOK_DIST = 3.0;
 const SHORTCUT_DOOR_SEAL = 0.035; 
+const DOOR_HEAD_CLEARANCE = 0.12;
 const ENTRANCE_YAW_FOR_WALL = {
   n: Math.PI,
   s: 0,
@@ -1735,6 +1737,7 @@ export class MazeGame {
     this.floorMeshes = [];
     this.hurdleMeshes = [];
     this._wallMeshByEdge = new Map();
+    this._crawlGapByEdge = new Map();
     this._wallAnims = [];
     this._wallDebrisBursts = [];
     this._debrisTex = null;
@@ -1757,6 +1760,7 @@ export class MazeGame {
     this._shortcutDoorLookTarget = null;
     this._raycaster = new THREE.Raycaster();
     this._doorLookTarget = null;
+    this._lastInteractPromptLabel = null;
     this._lookDir = new THREE.Vector3();
     this._torchRaycaster = new THREE.Raycaster();
     this._torchNearFactor = 1;
@@ -2231,6 +2235,7 @@ export class MazeGame {
     this.wallMeshes = [];
     this.hurdleMeshes = [];
     this._wallMeshByEdge.clear();
+    this._crawlGapByEdge.clear();
     this._wallAnims = [];
     if (this._wallDebrisBursts) {
       for (const b of this._wallDebrisBursts) {
@@ -2250,6 +2255,10 @@ export class MazeGame {
     this.entranceDoor = null;
     this._doorLookTarget = null;
     if (this.callbacks.onDoorLookAt) this.callbacks.onDoorLookAt(null);
+    if (this._lastInteractPromptLabel !== null) {
+      this._lastInteractPromptLabel = null;
+      if (this.callbacks.onInteractPrompt) this.callbacks.onInteractPrompt(null);
+    }
     if (this.shortcutDoors) {
       for (const d of this.shortcutDoors) this.scene.remove(d.group);
     }
@@ -2419,17 +2428,24 @@ export class MazeGame {
     const rx = width / 2;
     const ry = height / 2;
     const cy = floorLocalY + ry * 0.9;
+    const passWidth =
+      CRAWL_PASS_MIN_WIDTH + rng() * (CRAWL_PASS_MAX_WIDTH - CRAWL_PASS_MIN_WIDTH);
+    const maxCenterAbs = Math.max(0, rx - passWidth / 2 - 0.1);
+    const gapCenter = (rng() * 2 - 1) * maxCenterAbs;
+    const gapHalf = passWidth / 2;
     const pts = [];
     for (let i = 0; i < segments; i++) {
       const angle = (i / segments) * Math.PI * 2;
-      const jagX = 0.65 + rng() * 0.6;
-      const jagY = 0.92 + rng() * 0.16;
+      const nominalX = Math.cos(angle) * rx;
+      const inGap = Math.abs(nominalX - gapCenter) < gapHalf + rx * 0.12;
+      const jagX = inGap ? 1.05 + rng() * 0.15 : 0.65 + rng() * 0.6;
+      const jagY = inGap ? 0.98 + rng() * 0.1 : 0.92 + rng() * 0.16;
       const x = Math.cos(angle) * rx * jagX;
       let y = cy + Math.sin(angle) * ry * jagY;
       if (y < floorLocalY + 0.06) y = floorLocalY + rng() * 0.1;
       pts.push(new THREE.Vector2(x, y));
     }
-    return pts;
+    return { points: pts, gapCenter, gapHalf };
   }
   _buildCrawlHoleGeometry(width, spanHeight, depth, floorLocalY, rng) {
     const shape = new THREE.Shape();
@@ -2438,12 +2454,11 @@ export class MazeGame {
     shape.lineTo(width / 2, spanHeight);
     shape.lineTo(-width / 2, spanHeight);
     shape.lineTo(-width / 2, 0);
-    const holePts = this._jaggedHolePoints(
-      rng,
-      floorLocalY,
-      CRAWL_OPENING_WIDTH,
-      CRAWL_OPENING_HEIGHT,
-    );
+    const {
+      points: holePts,
+      gapCenter,
+      gapHalf,
+    } = this._jaggedHolePoints(rng, floorLocalY, CRAWL_OPENING_WIDTH, CRAWL_OPENING_HEIGHT);
     const holePath = new THREE.Path();
     holePath.moveTo(holePts[0].x, holePts[0].y);
     for (let i = 1; i < holePts.length; i++) holePath.lineTo(holePts[i].x, holePts[i].y);
@@ -2455,7 +2470,7 @@ export class MazeGame {
       curveSegments: 1,
     });
     geo.translate(0, 0, -depth / 2);
-    return geo;
+    return { geo, gapCenter, gapHalf };
   }
   _buildHurdleMesh(dir, cx, cz, floorY, mat) {
     const barY = floorY + HURDLE_HEIGHT / 2;
@@ -2886,10 +2901,16 @@ export class MazeGame {
         const geo = axis === 'z' ? wallGeo : wallGeoV;
         const m = new THREE.Mesh(geo, this._pickWallMaterial());
         m.position.set(cx, wallCenterY, cz);
-        return m;
+        return { mesh: m, gap: null };
       }
       const floorLocalY = floorY - wallBottom;
-      const geo = this._buildCrawlHoleGeometry(CELL, wallSpan, 0.25, floorLocalY, this.rng);
+      const { geo, gapCenter, gapHalf } = this._buildCrawlHoleGeometry(
+        CELL,
+        wallSpan,
+        0.25,
+        floorLocalY,
+        this.rng,
+      );
       const m = new THREE.Mesh(geo, this._pickWallMaterial());
       if (axis === 'z') {
         m.position.set(cx, wallBottom, cz);
@@ -2897,7 +2918,7 @@ export class MazeGame {
         m.rotation.y = Math.PI / 2;
         m.position.set(cx, wallBottom, cz);
       }
-      return m;
+      return { mesh: m, gap: { center: gapCenter, half: gapHalf } };
     };
     const originX = -(w * CELL) / 2;
     const originZ = -(h * CELL) / 2;
@@ -2923,13 +2944,16 @@ export class MazeGame {
               !!cell.doorOpenN,
             );
           } else {
-            const m = buildWallMesh(cell.crawlN, 'z', cx, cz - CELL / 2, floorY);
+            const { mesh: m, gap } = buildWallMesh(cell.crawlN, 'z', cx, cz - CELL / 2, floorY);
             this.scene.add(m);
             this.wallMeshes.push(m);
             if (y > 0) this._wallMeshByEdge.set(this._edgeKey(x, y - 1, 's'), m);
             if (!cell.crawlN) {
               this._maybeAddStain(m, 'z');
               this._maybeAddPainting(m, 'z');
+            } else {
+              this._crawlGapByEdge.set(this._edgeKey(x, y, 'n'), gap);
+              if (y > 0) this._crawlGapByEdge.set(this._edgeKey(x, y - 1, 's'), gap);
             }
           }
         }
@@ -2949,13 +2973,16 @@ export class MazeGame {
               !!cell.doorOpenW,
             );
           } else {
-            const m = buildWallMesh(cell.crawlW, 'x', cx - CELL / 2, cz, floorY);
+            const { mesh: m, gap } = buildWallMesh(cell.crawlW, 'x', cx - CELL / 2, cz, floorY);
             this.scene.add(m);
             this.wallMeshes.push(m);
             if (x > 0) this._wallMeshByEdge.set(this._edgeKey(x - 1, y, 'e'), m);
             if (!cell.crawlW) {
               this._maybeAddStain(m, 'x');
               this._maybeAddPainting(m, 'x');
+            } else {
+              this._crawlGapByEdge.set(this._edgeKey(x, y, 'w'), gap);
+              if (x > 0) this._crawlGapByEdge.set(this._edgeKey(x - 1, y, 'e'), gap);
             }
           }
         }
@@ -2998,6 +3025,9 @@ export class MazeGame {
   }
   _shortcutDoorAt(cx, cy, dir) {
     return this._shortcutDoorByEdge.get(this._edgeKey(cx, cy, dir)) || null;
+  }
+  _crawlGapAt(cx, cy, dir) {
+    return this._crawlGapByEdge.get(this._edgeKey(cx, cy, dir)) || null;
   }
   _cellCenter(cx, cy) {
     return {
@@ -3485,6 +3515,8 @@ export class MazeGame {
     this.running = false;
     this.audio.pause();
     this._setDoorLook(null);
+    this._shortcutDoorLookTarget = null;
+    this._updateInteractPrompt();
     this._joystickVec = null;
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock();
@@ -3501,6 +3533,8 @@ export class MazeGame {
     this.running = false;
     this.audio.pause();
     this._setDoorLook(null);
+    this._shortcutDoorLookTarget = null;
+    this._updateInteractPrompt();
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock();
     }
@@ -3523,9 +3557,11 @@ export class MazeGame {
     }
     return Math.max(0, Math.min(1, best));
   }
-  _hurdleAt(cx, cy, dir) {
+  _hurdleInfoAt(cx, cy, dir) {
     const cell = this.maze[cy][cx];
-    if (cell.hurdleDir === dir) return true;
+    if (cell.hurdleDir === dir) {
+      return { floorY: (cell.elevation || 0) * STEP_HEIGHT };
+    }
     const deltas = {
       n: [0, -1],
       s: [0, 1],
@@ -3541,8 +3577,31 @@ export class MazeGame {
     const d = deltas[dir];
     const nx = cx + d[0],
       ny = cy + d[1];
-    if (nx < 0 || nx >= this.mazeW || ny < 0 || ny >= this.mazeH) return false;
-    return this.maze[ny][nx].hurdleDir === opp[dir];
+    if (nx < 0 || nx >= this.mazeW || ny < 0 || ny >= this.mazeH) return null;
+    const ncell = this.maze[ny][nx];
+    if (ncell.hurdleDir === opp[dir]) {
+      return { floorY: (ncell.elevation || 0) * STEP_HEIGHT };
+    }
+    return null;
+  }
+  _hurdleBlocks(cx, cy, dir) {
+    const info = this._hurdleInfoAt(cx, cy, dir);
+    if (!info) return false;
+    const barTopY = info.floorY + HURDLE_HEIGHT;
+    const feetY = this._floorHeightAt(this.player.x, this.player.z) + this.verticalOffset;
+    return feetY < barTopY - 0.02;
+  }
+  _doorHeightClear(doorMeta) {
+    if (!doorMeta) return true;
+    const cell = this.maze[doorMeta.y] && this.maze[doorMeta.y][doorMeta.x];
+    const floorY = ((cell && cell.elevation) || 0) * STEP_HEIGHT;
+    const lintelY = floorY + SHORTCUT_DOOR_HEIGHT;
+    const headTopY =
+      this._floorHeightAt(this.player.x, this.player.z) +
+      this.currentEyeHeight +
+      this.verticalOffset +
+      DOOR_HEAD_CLEARANCE;
+    return headTopY < lintelY;
   }
   _canMove(nx, nz) {
     const relX = nx - this.mazeOrigin.x;
@@ -3554,34 +3613,63 @@ export class MazeGame {
     const localX = relX - cx * CELL;
     const localZ = relZ - cy * CELL;
     const r = COLLIDE_RADIUS;
-    const holeHalf = CRAWL_OPENING_WIDTH / 2;
-    const throughN = cell.crawlN && this.crouching && Math.abs(localX - CELL / 2) < holeHalf;
-    const throughS = cell.crawlS && this.crouching && Math.abs(localX - CELL / 2) < holeHalf;
-    const throughW = cell.crawlW && this.crouching && Math.abs(localZ - CELL / 2) < holeHalf;
-    const throughE = cell.crawlE && this.crouching && Math.abs(localZ - CELL / 2) < holeHalf;
+    const crawlGapN = cell.crawlN ? this._crawlGapAt(cx, cy, 'n') : null;
+    const crawlGapS = cell.crawlS ? this._crawlGapAt(cx, cy, 's') : null;
+    const crawlGapW = cell.crawlW ? this._crawlGapAt(cx, cy, 'w') : null;
+    const crawlGapE = cell.crawlE ? this._crawlGapAt(cx, cy, 'e') : null;
+    const throughN =
+      cell.crawlN &&
+      this.crouching &&
+      !!crawlGapN &&
+      Math.abs(localX - CELL / 2 - crawlGapN.center) < crawlGapN.half;
+    const throughS =
+      cell.crawlS &&
+      this.crouching &&
+      !!crawlGapS &&
+      Math.abs(localX - CELL / 2 - crawlGapS.center) < crawlGapS.half;
+    const throughW =
+      cell.crawlW &&
+      this.crouching &&
+      !!crawlGapW &&
+      Math.abs(localZ - CELL / 2 - crawlGapW.center) < crawlGapW.half;
+    const throughE =
+      cell.crawlE &&
+      this.crouching &&
+      !!crawlGapE &&
+      Math.abs(localZ - CELL / 2 - crawlGapE.center) < crawlGapE.half;
     const doorHalf = SHORTCUT_DOOR_WIDTH / 2;
     const doorN = cell.doorN ? this._shortcutDoorAt(cx, cy, 'n') : null;
     const doorS = cell.doorS ? this._shortcutDoorAt(cx, cy, 's') : null;
     const doorW = cell.doorW ? this._shortcutDoorAt(cx, cy, 'w') : null;
     const doorE = cell.doorE ? this._shortcutDoorAt(cx, cy, 'e') : null;
     const throughDoorN =
-      doorN && doorN.doorState !== 'closed' && Math.abs(localX - CELL / 2) < doorHalf;
+      doorN &&
+      doorN.doorState !== 'closed' &&
+      this._doorHeightClear(doorN) &&
+      Math.abs(localX - CELL / 2) < doorHalf;
     const throughDoorS =
-      doorS && doorS.doorState !== 'closed' && Math.abs(localX - CELL / 2) < doorHalf;
+      doorS &&
+      doorS.doorState !== 'closed' &&
+      this._doorHeightClear(doorS) &&
+      Math.abs(localX - CELL / 2) < doorHalf;
     const throughDoorW =
-      doorW && doorW.doorState !== 'closed' && Math.abs(localZ - CELL / 2) < doorHalf;
+      doorW &&
+      doorW.doorState !== 'closed' &&
+      this._doorHeightClear(doorW) &&
+      Math.abs(localZ - CELL / 2) < doorHalf;
     const throughDoorE =
-      doorE && doorE.doorState !== 'closed' && Math.abs(localZ - CELL / 2) < doorHalf;
+      doorE &&
+      doorE.doorState !== 'closed' &&
+      this._doorHeightClear(doorE) &&
+      Math.abs(localZ - CELL / 2) < doorHalf;
     if (cell.n && !throughN && !throughDoorN && localZ - r < 0.13) return false;
     if (cell.s && !throughS && !throughDoorS && localZ + r > CELL - 0.13) return false;
     if (cell.w && !throughW && !throughDoorW && localX - r < 0.13) return false;
     if (cell.e && !throughE && !throughDoorE && localX + r > CELL - 0.13) return false;
-    if (this.verticalOffset < HURDLE_CLEAR_HEIGHT) {
-      if (this._hurdleAt(cx, cy, 'n') && localZ - r < 0.13) return false;
-      if (this._hurdleAt(cx, cy, 's') && localZ + r > CELL - 0.13) return false;
-      if (this._hurdleAt(cx, cy, 'w') && localX - r < 0.13) return false;
-      if (this._hurdleAt(cx, cy, 'e') && localX + r > CELL - 0.13) return false;
-    }
+    if (this._hurdleBlocks(cx, cy, 'n') && localZ - r < 0.13) return false;
+    if (this._hurdleBlocks(cx, cy, 's') && localZ + r > CELL - 0.13) return false;
+    if (this._hurdleBlocks(cx, cy, 'w') && localX - r < 0.13) return false;
+    if (this._hurdleBlocks(cx, cy, 'e') && localX + r > CELL - 0.13) return false;
     if (this._furnitureColliders) {
       const furn = this._furnitureColliders.get(`${cx},${cy}`);
       if (furn) {
@@ -3719,7 +3807,7 @@ export class MazeGame {
     if (
       !this.exits ||
       !this.exits.length ||
-      document.pointerLockElement !== this.renderer.domElement
+      (!this.isTouchDevice && document.pointerLockElement !== this.renderer.domElement)
     ) {
       this._setDoorLook(null);
       return;
@@ -3747,6 +3835,23 @@ export class MazeGame {
     const letter = obj ? obj.userData.exitLetter : null;
     this._setDoorLook(letter ? this.exits.find((e) => e.letter === letter) : null);
   }
+  _updateInteractPrompt() {
+    let label = null;
+    let kind = null;
+    if (this._doorLookTarget) {
+      label = 'OPEN';
+      kind = 'exit';
+    } else if (this._shortcutDoorLookTarget) {
+      const state = this._shortcutDoorLookTarget.doorState;
+      label = state === 'open' || state === 'opening' ? 'CLOSE' : 'OPEN';
+      kind = 'shortcut';
+    }
+    if (label === this._lastInteractPromptLabel) return;
+    this._lastInteractPromptLabel = label;
+    if (this.callbacks.onInteractPrompt) {
+      this.callbacks.onInteractPrompt(label ? { label, kind } : null);
+    }
+  }
   _tryInteractDoor() {
     if (!this.running) return;
     if (this._doorLookTarget) {
@@ -3761,7 +3866,7 @@ export class MazeGame {
     if (
       !this.shortcutDoors ||
       !this.shortcutDoors.length ||
-      document.pointerLockElement !== this.renderer.domElement
+      (!this.isTouchDevice && document.pointerLockElement !== this.renderer.domElement)
     ) {
       this._shortcutDoorLookTarget = null;
       return;
@@ -4223,6 +4328,7 @@ export class MazeGame {
       this._updateDoorLook();
       this._updateDoors(dt);
       this._updateShortcutDoorLook();
+      this._updateInteractPrompt();
       this._updateShortcutDoors(dt);
       this._updateMazeShift(dt);
       this.elapsed += dt;
