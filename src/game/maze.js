@@ -269,7 +269,7 @@ export function assignDoors(grid, w, h, rng, opts = {}) {
     { dir: 'e', opp: 'w', dx: 1, dy: 0 },
     { dir: 's', opp: 'n', dx: 0, dy: 1 },
   ];
-
+  
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
@@ -382,7 +382,6 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
     const roomId = rooms.length;
     for (const [x, y] of cells) grid[y][x].roomId = roomId;
     openInteriorWalls(grid, w, h, cells);
-    
     for (const e of forcedDoorEdges) {
       setWall(grid, w, h, e.x, e.y, e.dir, true);
       const dirUp = e.dir.toUpperCase();
@@ -393,7 +392,6 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
       grid[e.y][e.x]['doorOpen' + dirUp] = startsOpen;
       grid[e.ny][e.nx]['doorOpen' + oppUp] = startsOpen;
     }
-    
     for (let i = wallEdges.length - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1));
       [wallEdges[i], wallEdges[j]] = [wallEdges[j], wallEdges[i]];
@@ -416,12 +414,185 @@ export function assignRooms(grid, w, h, rng, opts = {}) {
       grid[e.y][e.x]['doorOpen' + dirUp] = startsOpen;
       grid[e.ny][e.nx]['doorOpen' + oppUp] = startsOpen;
     }
+
     rooms.push({
       id: roomId,
       cells,
       elevation,
       doors: forcedDoorEdges.length + extraDoorsNeeded,
     });
+  }
+
+  return rooms;
+}
+const FURN_DIR_DELTA = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+const FURN_WALL_YAW = { n: 0, s: Math.PI, e: -Math.PI / 2, w: Math.PI / 2 };
+const FURN_DEPTH_FRAC = {
+  bed: 0.32,
+  cupboard: 0.14,
+  bedsideTable: 0.12,
+  table: 0.22,
+  chair: 0.14,
+};
+const FURN_MARGIN_FRAC = 0.03;
+
+function furnitureSolidWallDirs(cell) {
+  const dirs = [];
+  if (cell.n && !cell.doorN) dirs.push('n');
+  if (cell.s && !cell.doorS) dirs.push('s');
+  if (cell.e && !cell.doorE) dirs.push('e');
+  if (cell.w && !cell.doorW) dirs.push('w');
+  return dirs;
+}
+
+
+
+function pickWallSpot(grid, cells, usedCells, rng) {
+  const candidates = [];
+  for (const [x, y] of cells) {
+    const dirs = furnitureSolidWallDirs(grid[y][x]);
+    const used = usedCells.has(`${x},${y}`);
+    for (const dir of dirs) candidates.push({ x, y, dir, used });
+  }
+  if (!candidates.length) return null;
+  const fresh = candidates.filter((c) => !c.used);
+  const pool = fresh.length ? fresh : candidates;
+  return pool[Math.floor(rng() * pool.length)];
+}
+
+function makeWallItem(kind, x, y, dir, rng) {
+  const depth = FURN_DEPTH_FRAC[kind] ?? 0.15;
+  const reach = 0.5 - depth / 2 - FURN_MARGIN_FRAC;
+  const [dx, dz] = FURN_DIR_DELTA[dir];
+  const lateralSpan = Math.max(0, 0.5 - depth / 2 - 0.12);
+  const lateral = (rng() - 0.5) * lateralSpan;
+  let localX = dx * reach;
+  let localZ = dz * reach;
+  if (dir === 'n' || dir === 's') localX += lateral;
+  else localZ += lateral;
+  return { kind, x, y, localX, localZ, yaw: FURN_WALL_YAW[dir], overturned: false };
+}
+
+function makeCenterItem(kind, x, y, rng, overturnChance = 0) {
+  const jitter = 0.06;
+  return {
+    kind,
+    x,
+    y,
+    localX: (rng() - 0.5) * jitter,
+    localZ: (rng() - 0.5) * jitter,
+    yaw: rng() * Math.PI * 2,
+    overturned: rng() < overturnChance,
+  };
+}
+
+function makeChairAroundTable(x, y, dir, rng, overturnChance) {
+  const [dx, dz] = FURN_DIR_DELTA[dir];
+  const radius = 0.22 + rng() * 0.05;
+  return {
+    kind: 'chair',
+    x,
+    y,
+    localX: dx * radius,
+    localZ: dz * radius,
+    
+    yaw: FURN_WALL_YAW[dir] + Math.PI + (rng() - 0.5) * 0.35,
+    overturned: rng() < overturnChance,
+  };
+}
+
+function makePileItem(kind, x, y, rng, overturnChance) {
+  const angle = rng() * Math.PI * 2;
+  const radius = 0.08 + rng() * 0.28;
+  return {
+    kind,
+    x,
+    y,
+    localX: Math.cos(angle) * radius,
+    localZ: Math.sin(angle) * radius,
+    yaw: rng() * Math.PI * 2,
+    overturned: rng() < overturnChance,
+  };
+}
+
+function pickRoomType(rng, cellCount) {
+  const roll = rng();
+  if (cellCount <= 2) {
+    if (roll < 0.3) return 'bedroom';
+    if (roll < 0.55) return 'storage';
+    return 'empty';
+  }
+  if (roll < 0.18) return 'empty';
+  if (roll < 0.4) return 'bedroom';
+  if (roll < 0.62) return 'dining';
+  if (roll < 0.84) return 'living';
+  return 'storage';
+}
+
+function buildFurnitureForRoom(grid, room, rng) {
+  const items = [];
+  const cells = room.cells;
+  if (room.type === 'empty' || !cells.length) return items;
+  const usedCells = new Set();
+
+  if (room.type === 'bedroom') {
+    const spot = pickWallSpot(grid, cells, usedCells, rng);
+    if (spot) {
+      items.push(makeWallItem('bed', spot.x, spot.y, spot.dir, rng));
+      usedCells.add(`${spot.x},${spot.y}`);
+      if (rng() < 0.75) {
+        const spot2 = pickWallSpot(grid, cells, usedCells, rng);
+        if (spot2) {
+          items.push(makeWallItem('bedsideTable', spot2.x, spot2.y, spot2.dir, rng));
+          usedCells.add(`${spot2.x},${spot2.y}`);
+        }
+      }
+    }
+  } else if (room.type === 'dining') {
+    const [cx, cy] = cells[Math.floor(cells.length / 2)];
+    items.push(makeCenterItem('table', cx, cy, rng, 0.1));
+    usedCells.add(`${cx},${cy}`);
+    const dirs = shuffleInPlace(['n', 's', 'e', 'w'], rng);
+    const chairCount = 2 + Math.floor(rng() * 3); 
+    for (let i = 0; i < Math.min(chairCount, 4); i++) {
+      items.push(makeChairAroundTable(cx, cy, dirs[i], rng, 0.15));
+    }
+  } else if (room.type === 'living') {
+    const [cx, cy] = cells[Math.floor(rng() * cells.length)];
+    items.push(makeCenterItem('table', cx, cy, rng, 0.08));
+    usedCells.add(`${cx},${cy}`);
+    const dirs = shuffleInPlace(['n', 's', 'e', 'w'], rng);
+    const chairCount = 1 + Math.floor(rng() * 2); 
+    for (let i = 0; i < chairCount; i++) {
+      items.push(makeChairAroundTable(cx, cy, dirs[i], rng, 0.15));
+    }
+    if (cells.length > 1 && rng() < 0.6) {
+      const spot = pickWallSpot(grid, cells, usedCells, rng);
+      if (spot) items.push(makeWallItem('cupboard', spot.x, spot.y, spot.dir, rng));
+    }
+  } else if (room.type === 'storage') {
+    const cupboardCount = Math.min(cells.length, 1 + Math.floor(rng() * 2));
+    for (let i = 0; i < cupboardCount; i++) {
+      const spot = pickWallSpot(grid, cells, usedCells, rng);
+      if (!spot) break;
+      items.push(makeWallItem('cupboard', spot.x, spot.y, spot.dir, rng));
+      usedCells.add(`${spot.x},${spot.y}`);
+    }
+    const pileCell = cells.find(([x, y]) => !usedCells.has(`${x},${y}`)) || cells[0];
+    const pileCount = 2 + Math.floor(rng() * 3); 
+    for (let i = 0; i < pileCount; i++) {
+      const kind = rng() < 0.5 ? 'table' : 'chair';
+      items.push(makePileItem(kind, pileCell[0], pileCell[1], rng, 0.7));
+    }
+  }
+
+  return items;
+}
+
+export function assignRoomFurniture(grid, w, h, rooms, rng) {
+  for (const room of rooms) {
+    room.type = pickRoomType(rng, room.cells.length);
+    room.furniture = buildFurnitureForRoom(grid, room, rng);
   }
   return rooms;
 }
@@ -808,7 +979,6 @@ function isBridgeEdge(grid, w, h, edge) {
       }
     }
   }
-
   return !visited.has(targetKey);
 }
 
@@ -900,17 +1070,14 @@ export function pickMazeShift(grid, w, h, opts = {}) {
   const protectedCells = opts.protectedCells ?? [];
   const near = opts.near ?? null;
   const nearRadius = opts.nearRadius ?? 7;
-
   const protectedSet = new Set(protectedCells.map(([px, py]) => py * 100000 + px));
   const edges = listInteriorEdges(w, h);
-
   const edgeDist = (e) => {
     if (!near) return 0;
     const midX = (e.x + e.nx) / 2 + 0.5;
     const midY = (e.y + e.ny) / 2 + 0.5;
     return Math.hypot(midX - near.x, midY - near.y);
   };
-
   const rankByProximity = (list) => {
     if (!near) return shuffleInPlace(list, rng);
     const close = [];
@@ -970,14 +1137,12 @@ export function pickMazeShift(grid, w, h, opts = {}) {
     setWall(grid, w, h, edge.x, edge.y, edge.dir, true);
     changes.push({ type: 'rise', x: edge.x, y: edge.y, dir: edge.dir, nx: edge.nx, ny: edge.ny });
   }
-
   return changes;
 }
 
 export function generateSurfaceMap(w, h, rng = Math.random) {
   const map = Array.from({ length: h }, () => Array(w).fill('stone'));
   const cellCount = w * h;
-
   for (const type of ['grass', 'mud', 'water']) {
     const blobCount = Math.max(1, Math.round(cellCount / 90));
     for (let b = 0; b < blobCount; b++) {
@@ -994,6 +1159,5 @@ export function generateSurfaceMap(w, h, rng = Math.random) {
       }
     }
   }
-
   return map;
 }

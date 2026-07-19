@@ -15,6 +15,7 @@ import {
   assignDoors,
   clearHurdlesNearExits,
   clearHurdlesNearAllDoors,
+  assignRoomFurniture,
   assignRooms,
   pickMazeShift,
 } from './maze.js';
@@ -38,6 +39,12 @@ const HURDLE_CLEAR_HEIGHT = 0.55;
 const HURDLE_DEPTH = 0.3;
 const CRAWL_OPENING_HEIGHT = 1.25;
 const CRAWL_OPENING_WIDTH = CELL * 0.55;
+const FURNITURE_COLLIDE_RADIUS = {
+  bed: 1.0,
+  cupboard: 0.55,
+  bedsideTable: 0.33,
+  table: 0.7,
+};
 const TORCH_DOWN_TILT = 0;
 const TORCH_HEIGHT_OFFSET = 0.3;
 const TORCH_ANGLE = Math.PI / 8;
@@ -1257,6 +1264,249 @@ function makeDoorWoodCanvas(rng = Math.random) {
   drawPanel(26, 300, 204, 178);
   return c;
 }
+function makeDoorPanelCanvas(rng = Math.random, opts = {}) {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 512;
+  const ctx = c.getContext('2d');
+  const base = opts.base || '#3c2a1c';
+  const grain = opts.grain || [45, 24, 10];
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, 256, 512);
+  for (let i = 0; i < 5000; i++) {
+    const g = 25 + rng() * 45;
+    ctx.fillStyle = `rgba(${grain[0] + g},${grain[1] + g},${grain[2] + g},${(0.04 + rng() * 0.09).toFixed(2)})`;
+    const w = 1 + rng() * 2;
+    const h = 5 + rng() * 34;
+    ctx.fillRect(rng() * 256, rng() * 512, w, h);
+  }
+  for (let i = 1; i < 4; i++) {
+    const x = (256 / 4) * i;
+    ctx.strokeStyle = 'rgba(14,9,6,0.4)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 512);
+    ctx.stroke();
+  }
+  const drawPanel = (px, py, pw, ph) => {
+    ctx.strokeStyle = 'rgba(10,6,4,0.55)';
+    ctx.lineWidth = 7;
+    ctx.strokeRect(px, py, pw, ph);
+    ctx.strokeStyle = 'rgba(90,62,38,0.35)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 7, py + 7, pw - 14, ph - 14);
+  };
+  if (opts.pane) {
+    const px = 26,
+      py = 32,
+      pw = 204,
+      ph = 190;
+    ctx.strokeStyle = 'rgba(10,6,4,0.55)';
+    ctx.lineWidth = 7;
+    ctx.strokeRect(px, py, pw, ph);
+    ctx.fillStyle = opts.paneColor || 'rgba(120,135,145,0.28)';
+    ctx.fillRect(px + 8, py + 8, pw - 16, ph - 16);
+    ctx.strokeStyle = 'rgba(18,13,8,0.6)';
+    ctx.lineWidth = 4;
+    if (opts.pane === 'cross') {
+      ctx.beginPath();
+      ctx.moveTo(px + pw / 2, py + 8);
+      ctx.lineTo(px + pw / 2, py + ph - 8);
+      ctx.moveTo(px + 8, py + ph / 2);
+      ctx.lineTo(px + pw - 8, py + ph / 2);
+      ctx.stroke();
+    } else if (opts.pane === 'diamond') {
+      for (let gx = 1; gx < 3; gx++) {
+        const x = px + (pw / 3) * gx;
+        ctx.beginPath();
+        ctx.moveTo(x, py + 8);
+        ctx.lineTo(x, py + ph - 8);
+        ctx.stroke();
+      }
+      for (let gy = 1; gy < 3; gy++) {
+        const y = py + (ph / 3) * gy;
+        ctx.beginPath();
+        ctx.moveTo(px + 8, y);
+        ctx.lineTo(px + pw - 8, y);
+        ctx.stroke();
+      }
+    } else if (opts.pane === 'small') {
+      ctx.strokeRect(px + pw * 0.28, py + ph * 0.15, pw * 0.44, ph * 0.32);
+    }
+    drawPanel(26, 300, 204, 178);
+  } else if (opts.ornate) {
+    drawPanel(26, 30, 204, 138);
+    drawPanel(26, 186, 204, 138);
+    drawPanel(26, 342, 204, 138);
+    ctx.strokeStyle = 'rgba(90,62,38,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(128, 60);
+    ctx.lineTo(178, 100);
+    ctx.lineTo(128, 140);
+    ctx.lineTo(78, 100);
+    ctx.closePath();
+    ctx.stroke();
+  } else {
+    drawPanel(26, 32, 204, 232);
+    drawPanel(26, 300, 204, 178);
+  }
+  return c;
+}
+const DOOR_STYLES = [
+  { key: 'darkOak', base: '#2c2016', grain: [40, 26, 14], handle: 0x2b2b2e },
+  { key: 'ashGrey', base: '#3a3934', grain: [48, 48, 44], handle: 0x55524a },
+  {
+    key: 'crimsonFaded',
+    base: '#40232a',
+    grain: [46, 22, 24],
+    ornate: true,
+    handle: 0x6b5a3a,
+  },
+  {
+    key: 'spruceDusty',
+    base: '#31352a',
+    grain: [38, 40, 30],
+    pane: 'diamond',
+    paneColor: 'rgba(140,150,132,0.22)',
+    handle: 0x3a3a3e,
+  },
+  {
+    key: 'birchPale',
+    base: '#5e5140',
+    grain: [72, 63, 50],
+    pane: 'small',
+    paneColor: 'rgba(175,182,178,0.26)',
+    handle: 0xa89d7c,
+  },
+  { key: 'charred', base: '#181410', grain: [28, 22, 16], handle: 0x1c1c1e },
+  {
+    key: 'ironGrey',
+    base: '#3a3b3e',
+    grain: [50, 52, 56],
+    pane: 'cross',
+    paneColor: 'rgba(100,110,120,0.22)',
+    handle: 0x8a8f96,
+    metal: true,
+  },
+];
+function makeHurdleWoodCanvas(rng = Math.random, opts = {}) {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 128;
+  const ctx = c.getContext('2d');
+  const base = opts.base || '#332a1e';
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, 256, 128);
+  const grain = opts.grain || [40, 32, 20];
+  for (let i = 0; i < 1600; i++) {
+    const g = 15 + rng() * 35;
+    ctx.fillStyle = `rgba(${grain[0] + g},${grain[1] + g},${grain[2] + g},${(0.04 + rng() * 0.08).toFixed(2)})`;
+    const w = 6 + rng() * 30;
+    const h = 1 + rng() * 1.6;
+    ctx.fillRect(rng() * 256, rng() * 128, w, h);
+  }
+  
+  for (let i = 1; i < 3; i++) {
+    const y = (128 / 3) * i;
+    ctx.strokeStyle = 'rgba(10,7,4,0.5)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(256, y);
+    ctx.stroke();
+  }
+  
+  
+  const scuffs = 4 + Math.floor(rng() * 6);
+  for (let i = 0; i < scuffs; i++) {
+    ctx.strokeStyle = `rgba(6,4,2,${(0.15 + rng() * 0.2).toFixed(2)})`;
+    ctx.lineWidth = 0.8 + rng() * 1.6;
+    const x0 = rng() * 256,
+      y0 = rng() * 128;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + (rng() - 0.5) * 40, y0 + (rng() - 0.5) * 20);
+    ctx.stroke();
+  }
+  if (opts.moss) {
+    const patches = 2 + Math.floor(rng() * 3);
+    for (let i = 0; i < patches; i++) {
+      const x = rng() * 256,
+        y = rng() * 128,
+        r = 5 + rng() * 12;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, 'rgba(50,60,36,0.35)');
+      grad.addColorStop(1, 'rgba(50,60,36,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  return c;
+}
+const HURDLE_STYLES = [
+  { key: 'plainPlank', base: '#332a1e', grain: [40, 32, 20] },
+  { key: 'ashenPlank', base: '#2c2a24', grain: [42, 40, 34] },
+  { key: 'mossyPlank', base: '#302a1c', grain: [38, 34, 22], moss: true },
+];
+function makeFurnitureWoodCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const tones = ['#3f2c1d', '#4a3624', '#372515'];
+  ctx.fillStyle = tones[Math.floor(rng() * tones.length)];
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2200; i++) {
+    const g = 20 + rng() * 40;
+    ctx.fillStyle = `rgba(${g + 45},${g + 24},${g + 8},${(0.03 + rng() * 0.08).toFixed(2)})`;
+    const w = 1 + rng() * 1.5;
+    const h = 8 + rng() * 40;
+    ctx.fillRect(rng() * 256, rng() * 256, w, h);
+  }
+  
+  const scuffs = 3 + Math.floor(rng() * 5);
+  for (let i = 0; i < scuffs; i++) {
+    ctx.strokeStyle = `rgba(8,5,3,${(0.15 + rng() * 0.2).toFixed(2)})`;
+    ctx.lineWidth = 0.6 + rng() * 1.4;
+    const x0 = rng() * 256,
+      y0 = rng() * 256;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x0 + (rng() - 0.5) * 60, y0 + (rng() - 0.5) * 60);
+    ctx.stroke();
+  }
+  return c;
+}
+function makeFabricCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#4a463c';
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 1400; i++) {
+    const g = 55 + rng() * 30;
+    ctx.fillStyle = `rgba(${g},${g - 4},${g - 14},${(0.03 + rng() * 0.07).toFixed(2)})`;
+    ctx.fillRect(rng() * 128, rng() * 128, 1, 1);
+  }
+  
+  const blotches = 2 + Math.floor(rng() * 3);
+  for (let i = 0; i < blotches; i++) {
+    const x = rng() * 128,
+      y = rng() * 128,
+      r = 6 + rng() * 16;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, `rgba(20,16,12,${(0.2 + rng() * 0.25).toFixed(2)})`);
+    grad.addColorStop(1, 'rgba(20,16,12,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  return c;
+}
 function makeMistCanvas() {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
@@ -2007,6 +2257,11 @@ export class MazeGame {
     this._shortcutDoorByEdge = new Map();
     this._shortcutDoorLookTarget = null;
     if (this.ceilMesh) this.scene.remove(this.ceilMesh);
+    if (this.furnitureMeshes) {
+      for (const m of this.furnitureMeshes) this.scene.remove(m);
+    }
+    this.furnitureMeshes = [];
+    this._furnitureColliders = new Map();
   }
   _maybeAddStain(wallMesh, axis) {
     const rng = this.rng || Math.random;
@@ -2086,7 +2341,6 @@ export class MazeGame {
     this.hurdleMeshes = [];
     const originX = -(this.mazeW * CELL) / 2;
     const originZ = -(this.mazeH * CELL) / 2;
-    const hurdleMat = this._hurdleMat;
     for (let y = 0; y < this.mazeH; y++) {
       for (let x = 0; x < this.mazeW; x++) {
         const cell = this.maze[y][x];
@@ -2094,7 +2348,7 @@ export class MazeGame {
         const cx = originX + x * CELL + CELL / 2;
         const cz = originZ + y * CELL + CELL / 2;
         const floorY = (cell.elevation || 0) * STEP_HEIGHT;
-        const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, hurdleMat);
+        const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, this._pickHurdleMaterial());
         this.scene.add(m);
         this.wallMeshes.push(m);
         this.hurdleMeshes.push(m);
@@ -2222,6 +2476,246 @@ export class MazeGame {
     m.receiveShadow = true;
     return m;
   }
+  _buildHurdleMaterialPalette() {
+    if (this._hurdlePalette) return this._hurdlePalette;
+    const rng = this.rng || Math.random;
+    this._hurdlePalette = HURDLE_STYLES.map((style) =>
+      this._makeWallMaterial(makeHurdleWoodCanvas(rng, style), {
+        roughness: 0.88,
+        metalness: 0.04,
+        color: 0xffffff,
+        repeatX: 2.2,
+        repeatY: 1,
+      }),
+    );
+    return this._hurdlePalette;
+  }
+  _pickHurdleMaterial() {
+    const palette = this._buildHurdleMaterialPalette();
+    const rng = this.rng || Math.random;
+    return palette[Math.floor(rng() * palette.length)];
+  }
+  _buildFurnitureMaterials() {
+    if (this._furnitureMats) return this._furnitureMats;
+    const rng = this.rng || Math.random;
+    const woodTints = [0x8a7658, 0x7d6a4d, 0x6f5c42];
+    const wood = woodTints.map((color) =>
+      this._makeWallMaterial(makeFurnitureWoodCanvas(rng), {
+        roughness: 0.92,
+        metalness: 0.02,
+        color,
+        repeatX: 1,
+        repeatY: 1,
+      }),
+    );
+    this._furnitureMats = { wood };
+    return this._furnitureMats;
+  }
+  _buildRoomFurniture(rooms) {
+    if (!rooms || !rooms.length) return;
+    if (!this.furnitureMeshes) this.furnitureMeshes = [];
+    if (!this._furnitureColliders) this._furnitureColliders = new Map();
+    const rng = this.rng || Math.random;
+    const { x: ox, z: oz } = this.mazeOrigin;
+    for (const room of rooms) {
+      if (!room.furniture || !room.furniture.length) continue;
+      for (const item of room.furniture) {
+        const cell = this.maze[item.y][item.x];
+        const floorY = (cell.elevation || 0) * STEP_HEIGHT;
+        const cx = ox + item.x * CELL + CELL / 2 + item.localX * CELL;
+        const cz = oz + item.y * CELL + CELL / 2 + item.localZ * CELL;
+        const mesh = this._buildFurnitureMesh(item.kind, item.overturned, rng);
+        if (!mesh) continue;
+        mesh.position.set(cx, floorY, cz);
+        mesh.rotation.y = item.yaw || 0;
+        this.scene.add(mesh);
+        this.furnitureMeshes.push(mesh);
+        
+        
+        
+        const collideRadius = !item.overturned ? FURNITURE_COLLIDE_RADIUS[item.kind] : null;
+        if (collideRadius) {
+          const key = `${item.x},${item.y}`;
+          if (!this._furnitureColliders.has(key)) this._furnitureColliders.set(key, []);
+          this._furnitureColliders.get(key).push({ x: cx, z: cz, radius: collideRadius });
+        }
+      }
+    }
+  }
+  _pickFurnitureWood() {
+    const mats = this._buildFurnitureMaterials();
+    const rng = this.rng || Math.random;
+    return mats.wood[Math.floor(rng() * mats.wood.length)];
+  }
+  _buildFurnitureMesh(kind, overturned, rng) {
+    const wood = this._pickFurnitureWood();
+    switch (kind) {
+      case 'bed':
+        return this._buildBedMesh(wood);
+      case 'cupboard':
+        return this._buildCupboardMesh(wood, rng);
+      case 'bedsideTable':
+        return this._buildBedsideTableMesh(wood);
+      case 'table':
+        return this._buildTableMesh(wood, overturned, rng);
+      case 'chair':
+        return this._buildChairMesh(wood, overturned, rng);
+      default:
+        return null;
+    }
+  }
+  _fabricMaterial() {
+    if (this._fabricMat) return this._fabricMat;
+    const rng = this.rng || Math.random;
+    this._fabricMat = this._makeWallMaterial(makeFabricCanvas(rng), {
+      roughness: 1,
+      metalness: 0,
+      color: 0x555049,
+      repeatX: 1,
+      repeatY: 1,
+    });
+    return this._fabricMat;
+  }
+  _buildBedMesh(wood) {
+    const g = new THREE.Group();
+    const fabric = this._fabricMaterial();
+    const frameH = 0.32;
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(1.85, frameH, 1.15), wood);
+    frame.position.set(0, frameH / 2, 0);
+    const mattress = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.22, 1.0), fabric);
+    mattress.position.set(0, frameH + 0.11, 0.03);
+    const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.32), fabric);
+    pillow.position.set(0, frameH + 0.22 + 0.07, -0.34);
+    const headboard = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.55, 0.08), wood);
+    headboard.position.set(0, frameH / 2 + 0.55 / 2, -1.15 / 2 - 0.02);
+    for (const m of [frame, mattress, pillow, headboard]) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+      g.add(m);
+    }
+    return g;
+  }
+  _buildCupboardMesh(wood, rng) {
+    const r = rng || this.rng || Math.random;
+    const g = new THREE.Group();
+    const w = 0.95,
+      hgt = 1.9,
+      d = 0.5;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, d), wood);
+    body.position.set(0, hgt / 2, 0);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    g.add(body);
+    if (r() < 0.6) {
+      const doorW = w * 0.48;
+      const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, hgt * 0.82, 0.045), wood);
+      door.position.set(-w / 2 + doorW / 2 + 0.02, hgt * 0.48, d / 2 + 0.03);
+      door.rotation.y = 0.16 + r() * 0.18;
+      door.castShadow = true;
+      g.add(door);
+    }
+    return g;
+  }
+  _buildBedsideTableMesh(wood) {
+    const g = new THREE.Group();
+    const w = 0.5,
+      hgt = 0.55,
+      d = 0.42;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, d), wood);
+    body.position.set(0, hgt / 2, 0);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    g.add(body);
+    const lampMat = new THREE.MeshStandardMaterial({
+      color: 0x2c2a26,
+      roughness: 0.4,
+      metalness: 0.6,
+    });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.22, 8), lampMat);
+    base.position.set(0, hgt + 0.11, 0);
+    g.add(base);
+    
+    
+    const shadeMat = new THREE.MeshStandardMaterial({
+      color: 0xcbb583,
+      emissive: 0x4a3510,
+      emissiveIntensity: 0.6,
+      roughness: 0.65,
+      side: THREE.DoubleSide,
+    });
+    const shade = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.18, 10, 1, true), shadeMat);
+    shade.position.set(0, hgt + 0.22 + 0.09, 0);
+    g.add(shade);
+    return g;
+  }
+  _buildTableMesh(wood, overturned, rng) {
+    const r = rng || this.rng || Math.random;
+    const g = new THREE.Group();
+    const topW = 1.15,
+      topD = 0.75,
+      topH = 0.06,
+      legH = 0.68,
+      legT = 0.06;
+    const top = new THREE.Mesh(new THREE.BoxGeometry(topW, topH, topD), wood);
+    top.position.set(0, legH + topH / 2, 0);
+    top.castShadow = true;
+    top.receiveShadow = true;
+    g.add(top);
+    const legOffX = topW / 2 - 0.08,
+      legOffZ = topD / 2 - 0.08;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(legT, legH, legT), wood);
+        leg.position.set(sx * legOffX, legH / 2, sz * legOffZ);
+        leg.castShadow = true;
+        g.add(leg);
+      }
+    }
+    if (!overturned) return g;
+    const wrapper = new THREE.Group();
+    g.position.set(0, -(legH + topH) / 2, 0);
+    wrapper.add(g);
+    wrapper.rotation.z = Math.PI / 2 + (r() - 0.5) * 0.4;
+    wrapper.rotation.y = r() * Math.PI * 2;
+    wrapper.position.y = topW / 2 + 0.03;
+    return wrapper;
+  }
+  _buildChairMesh(wood, overturned, rng) {
+    const r = rng || this.rng || Math.random;
+    const g = new THREE.Group();
+    const seatW = 0.42,
+      seatD = 0.42,
+      seatH = 0.45,
+      legT = 0.05,
+      backH = 0.5;
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(seatW, 0.05, seatD), wood);
+    seat.position.set(0, seatH, 0);
+    seat.castShadow = true;
+    seat.receiveShadow = true;
+    g.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(seatW, backH, 0.05), wood);
+    back.position.set(0, seatH + backH / 2, -seatD / 2 + 0.02);
+    back.castShadow = true;
+    g.add(back);
+    const legOffX = seatW / 2 - 0.05,
+      legOffZ = seatD / 2 - 0.05;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(legT, seatH, legT), wood);
+        leg.position.set(sx * legOffX, seatH / 2, sz * legOffZ);
+        leg.castShadow = true;
+        g.add(leg);
+      }
+    }
+    if (!overturned) return g;
+    const wrapper = new THREE.Group();
+    g.position.set(0, -(seatH + backH / 2) * 0.55, 0);
+    wrapper.add(g);
+    wrapper.rotation.x = (r() < 0.5 ? 1 : -1) * (Math.PI / 2 + (r() - 0.5) * 0.4);
+    wrapper.rotation.y = r() * Math.PI * 2;
+    wrapper.position.y = seatW / 2 + 0.12;
+    return wrapper;
+  }
   _buildShortcutHoleGeometry(spanHeight, depth, floorLocalY) {
     const width = CELL;
     const shape = new THREE.Shape();
@@ -2247,30 +2741,36 @@ export class MazeGame {
     geo.translate(0, 0, -depth / 2);
     return geo;
   }
-  _shortcutDoorMaterials() {
-    if (!this._shortcutDoorWoodMat) {
-      const tex = new THREE.CanvasTexture(makeDoorWoodCanvas(this.rng || Math.random));
+  _buildShortcutDoorMaterialPalette() {
+    if (this._shortcutDoorPalette) return this._shortcutDoorPalette;
+    const rng = this.rng || Math.random;
+    this._shortcutDoorPalette = DOOR_STYLES.map((style) => {
+      const canvas = style.metal
+        ? makeBrushedMetalCanvas([58, 59, 63], [190, 195, 202])
+        : makeDoorPanelCanvas(rng, style);
+      const tex = new THREE.CanvasTexture(canvas);
       tex.colorSpace = THREE.SRGBColorSpace;
-      this._shortcutDoorWoodMat = new THREE.MeshStandardMaterial({
+      const woodMat = new THREE.MeshStandardMaterial({
         map: tex,
-        roughness: 0.78,
-        metalness: 0.06,
+        roughness: style.metal ? 0.45 : 0.78,
+        metalness: style.metal ? 0.55 : 0.06,
       });
-    }
-    if (!this._shortcutDoorHandleMat) {
-      this._shortcutDoorHandleMat = new THREE.MeshStandardMaterial({
-        color: 0x2b2b2e,
+      const handleMat = new THREE.MeshStandardMaterial({
+        color: style.handle ?? 0x2b2b2e,
         roughness: 0.35,
         metalness: 0.75,
       });
-    }
-    return {
-      woodMat: this._shortcutDoorWoodMat,
-      handleMat: this._shortcutDoorHandleMat,
-    };
+      return { woodMat, handleMat };
+    });
+    return this._shortcutDoorPalette;
+  }
+  _pickShortcutDoorMaterials() {
+    const palette = this._buildShortcutDoorMaterialPalette();
+    const rng = this.rng || Math.random;
+    return palette[Math.floor(rng() * palette.length)];
   }
   _buildShortcutDoorGroup(axis, cx, cz, floorY) {
-    const { woodMat, handleMat } = this._shortcutDoorMaterials();
+    const { woodMat, handleMat } = this._pickShortcutDoorMaterials();
     const group = new THREE.Group();
     group.position.set(cx, floorY, cz);
     if (axis === 'x') group.rotation.y = Math.PI / 2;
@@ -2354,14 +2854,7 @@ export class MazeGame {
     this._paintingCap = Math.round(
       PAINTING_MAX_PER_MAZE_BASE + w * h * PAINTING_MAX_PER_MAZE_PER_CELL,
     );
-    const hurdleMat =
-      this._hurdleMat ||
-      new THREE.MeshStandardMaterial({
-        color: 0x3a3428,
-        roughness: 0.85,
-        metalness: 0.05,
-      });
-    this._hurdleMat = hurdleMat;
+    this._buildHurdleMaterialPalette();
     const ceilMat = new THREE.MeshStandardMaterial({
       color: 0x050506,
       roughness: 1,
@@ -2483,7 +2976,7 @@ export class MazeGame {
           this._maybeAddPainting(m, 'x');
         }
         if (cell.hurdleDir) {
-          const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, hurdleMat);
+          const m = this._buildHurdleMesh(cell.hurdleDir, cx, cz, floorY, this._pickHurdleMaterial());
           this.scene.add(m);
           this.wallMeshes.push(m);
           this.hurdleMeshes.push(m);
@@ -2732,11 +3225,19 @@ export class MazeGame {
       ...e,
       letter: EXIT_LETTERS[i] || String(i + 1),
     }));
+    
+    
+    
     clearHurdlesNearExits(this.maze, w, h, this.exits);
-    assignRooms(this.maze, w, h, this.rng, {
+    const rooms = assignRooms(this.maze, w, h, this.rng, {
       avoidCells: [[0, 0], ...this.exits.map((e) => [e.x, e.y])],
       density,
     });
+    assignRoomFurniture(this.maze, w, h, rooms, this.rng);
+    this.rooms = rooms;
+    
+    
+    
     clearHurdlesNearAllDoors(this.maze, w, h);
     this._roomCells = [];
     for (let ry = 0; ry < h; ry++) {
@@ -2747,6 +3248,7 @@ export class MazeGame {
     this.discoveredExits = new Set();
     const origin = this._buildMazeMeshes(this.maze, w, h);
     this.mazeOrigin = origin;
+    this._buildRoomFurniture(this.rooms);
     this._buildDoors(this.exits);
     for (const exit of this.exits) {
       exit.distGrid = bfsDistances(this.maze, w, h, exit.x, exit.y);
@@ -3079,6 +3581,14 @@ export class MazeGame {
       if (this._hurdleAt(cx, cy, 's') && localZ + r > CELL - 0.13) return false;
       if (this._hurdleAt(cx, cy, 'w') && localX - r < 0.13) return false;
       if (this._hurdleAt(cx, cy, 'e') && localX + r > CELL - 0.13) return false;
+    }
+    if (this._furnitureColliders) {
+      const furn = this._furnitureColliders.get(`${cx},${cy}`);
+      if (furn) {
+        for (const f of furn) {
+          if (Math.hypot(nx - f.x, nz - f.z) < f.radius + r) return false;
+        }
+      }
     }
     return true;
   }
