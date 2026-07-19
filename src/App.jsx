@@ -212,7 +212,11 @@ export default function App() {
           {doorPrompt && !paused && (
             <div className="door-prompt">
               <span className="door-prompt-key">E</span>
-              open the door to {doorPrompt.nextLabel}
+              {doorPrompt.kind === 'exit'
+                ? `open the door to ${doorPrompt.nextLabel}`
+                : doorPrompt.label === 'CLOSE'
+                ? 'close the door'
+                : 'open the door'}
             </div>
           )}
 

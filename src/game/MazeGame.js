@@ -2254,11 +2254,8 @@ export class MazeGame {
     this.doors = [];
     this.entranceDoor = null;
     this._doorLookTarget = null;
+    this._lastInteractPromptLabel = null;
     if (this.callbacks.onDoorLookAt) this.callbacks.onDoorLookAt(null);
-    if (this._lastInteractPromptLabel !== null) {
-      this._lastInteractPromptLabel = null;
-      if (this.callbacks.onInteractPrompt) this.callbacks.onInteractPrompt(null);
-    }
     if (this.shortcutDoors) {
       for (const d of this.shortcutDoors) this.scene.remove(d.group);
     }
@@ -3836,21 +3833,26 @@ export class MazeGame {
     this._setDoorLook(letter ? this.exits.find((e) => e.letter === letter) : null);
   }
   _updateInteractPrompt() {
-    let label = null;
-    let kind = null;
+    let payload = null;
     if (this._doorLookTarget) {
-      label = 'OPEN';
-      kind = 'exit';
+      const exit = this._doorLookTarget;
+      payload = {
+        kind: 'exit',
+        label: 'OPEN',
+        letter: exit.letter,
+        nextLabel: `${this.level + 1}${exit.letter.toUpperCase()}`,
+      };
     } else if (this._shortcutDoorLookTarget) {
       const state = this._shortcutDoorLookTarget.doorState;
-      label = state === 'open' || state === 'opening' ? 'CLOSE' : 'OPEN';
-      kind = 'shortcut';
+      payload = {
+        kind: 'shortcut',
+        label: state === 'open' || state === 'opening' ? 'CLOSE' : 'OPEN',
+      };
     }
-    if (label === this._lastInteractPromptLabel) return;
-    this._lastInteractPromptLabel = label;
-    if (this.callbacks.onInteractPrompt) {
-      this.callbacks.onInteractPrompt(label ? { label, kind } : null);
-    }
+    const signature = payload ? `${payload.kind}:${payload.label}:${payload.letter || ''}` : null;
+    if (signature === this._lastInteractPromptLabel) return;
+    this._lastInteractPromptLabel = signature;
+    if (this.callbacks.onDoorLookAt) this.callbacks.onDoorLookAt(payload);
   }
   _tryInteractDoor() {
     if (!this.running) return;
