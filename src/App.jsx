@@ -187,7 +187,14 @@ export default function App() {
           <div className="hud">
             <div className="top-bar">
               <div className="stat">LEVEL <b>{floorLabel}</b></div>
-              <div className="stat">TIME <b>{formatTime(time)}</b></div>
+              <div className={`stat ${isTouchDevice ? 'stat-time-mobile' : ''}`}>
+                {isTouchDevice && (
+                  <div className="progress-corner-mobile">
+                    <div className="progress-fill" style={{ width: `${progressPct}%` }} />
+                  </div>
+                )}
+                TIME <b>{formatTime(time)}</b>
+              </div>
               {isTouchDevice && (
                 <button type="button" className="pause-btn" onClick={pauseGame}>
                   ⏸
@@ -195,9 +202,11 @@ export default function App() {
               )}
             </div>
           </div>
-          <div className="progress-corner">
-            <div className="progress-fill" style={{ width: `${progressPct}%` }} />
-          </div>
+          {!isTouchDevice && (
+            <div className="progress-corner">
+              <div className="progress-fill" style={{ width: `${progressPct}%` }} />
+            </div>
+          )}
           {discoveredExits.length > 0 && (
             <div className="exits-corner">
               <span className="exits-corner-label">FOUND</span>
