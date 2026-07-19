@@ -1109,7 +1109,7 @@ export function pickMazeShift(grid, w, h, opts = {}) {
     const elevHere = grid[edge.y][edge.x].elevation || 0;
     const elevThere = grid[edge.ny][edge.nx].elevation || 0;
     let flattened = false;
-    if (elevHere !== elevThere) {
+    if (elevHere !== elevThere) { 
       const sizeHere = collectPlateau(grid, w, h, edge.x, edge.y).cells.length;
       const sizeThere = collectPlateau(grid, w, h, edge.nx, edge.ny).cells.length;
       const ok =
