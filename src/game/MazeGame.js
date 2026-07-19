@@ -132,19 +132,23 @@ const STAIN_CHANCE = 0.45;
 const WALL_STYLE_WEIGHTS = [
   {
     style: 'normal',
-    weight: 0.58,
+    weight: 0.52,
   },
   {
     style: 'eerie1',
-    weight: 0.14,
+    weight: 0.13,
   },
   {
     style: 'eerie2',
-    weight: 0.14,
+    weight: 0.13,
   },
   {
     style: 'cracked',
-    weight: 0.14,
+    weight: 0.13,
+  },
+  {
+    style: 'stained',
+    weight: 0.09,
   },
 ];
 const PAINTING_CHANCE = 0.09;
@@ -168,6 +172,9 @@ const PAINTING_SCENES = [
   'staircase',
   'teeth',
   'family_wrong',
+  'cracked_mirror',
+  'watching_window',
+  'screaming_mouth',
 ];
 const CREEPY_CAPTIONS = [
   'IT WAITS WHERE YOU DO NOT LOOK.',
@@ -206,6 +213,17 @@ const CREEPY_CAPTIONS = [
   'I HEARD IT BREATHING.',
   'NO ONE ELSE REMEMBERS THIS PLACE.',
   'IT ONLY MOVES WHEN YOU BLINK.',
+  'YOU HAVE BEEN HERE BEFORE.',
+  'THE GLASS SHOWS WHAT ISN\'T THERE.',
+  'IT COUNTS YOUR FOOTSTEPS.',
+  'SOMEONE ELSE IS BREATHING.',
+  'THE PICTURES CHANGE WHEN YOU LEAVE.',
+  'DO NOT ANSWER IF IT KNOCKS TWICE.',
+  'I DREW THIS FROM MEMORY.',
+  'IT LEARNED TO WEAR MY FACE.',
+  'THE FLOOR REMEMBERS WHO FELL.',
+  'STILL COUNTING THE DOORS.',
+  'IT SLEEPS BEHIND YOUR EYES.',
 ];
 function makeStoneCanvas() {
   const c = document.createElement('canvas');
@@ -306,6 +324,79 @@ function makeCrackedStoneCanvas(rng = Math.random) {
       ctx.lineTo(x, y);
     }
     ctx.stroke();
+  }
+  return c;
+}
+function makeStainedStoneCanvas(rng = Math.random) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#b4afa4';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 3000; i++) {
+    const g = 150 + rng() * 55;
+    ctx.fillStyle = `rgba(${g},${g - 4},${g - 12},${(0.05 + rng() * 0.1).toFixed(2)})`;
+    const s = 1 + rng() * 3;
+    ctx.fillRect(rng() * 256, rng() * 256, s, s);
+  }
+  const streaks = 4 + Math.floor(rng() * 4);
+  for (let i = 0; i < streaks; i++) {
+    const x0 = rng() * 256;
+    const y0 = rng() * 90;
+    const len = 60 + rng() * 130;
+    const w0 = 3 + rng() * 6;
+    const dark = rng() < 0.5;
+    const grad = ctx.createLinearGradient(x0, y0, x0, y0 + len);
+    if (dark) {
+      grad.addColorStop(0, 'rgba(30,15,12,0.5)');
+      grad.addColorStop(1, 'rgba(30,15,12,0)');
+    } else {
+      grad.addColorStop(0, 'rgba(60,10,10,0.4)');
+      grad.addColorStop(1, 'rgba(60,10,10,0)');
+    }
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x0 - w0 / 2, y0);
+    let x = x0;
+    let y = y0;
+    const segs = 6 + Math.floor(rng() * 5);
+    const pts = [[x0 - w0 / 2, y0]];
+    for (let s = 0; s < segs; s++) {
+      x += (rng() - 0.5) * 4;
+      y += len / segs;
+      pts.push([x - w0 / 2, y]);
+    }
+    for (let s = pts.length - 1; s >= 0; s--) {
+      ctx.lineTo(pts[s][0] + w0, pts[s][1]);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  if (rng() < 0.6) {
+    const hx = 40 + rng() * 176,
+      hy = 100 + rng() * 100;
+    const scale = (0.7 + rng() * 0.5) * 3;
+    ctx.save();
+    ctx.translate(hx, hy);
+    ctx.rotate((rng() - 0.5) * 1.4);
+    ctx.fillStyle = 'rgba(55,12,12,0.42)';
+    ctx.beginPath();
+    ctx.ellipse(0, 10 * scale, 9 * scale, 12 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (let f = -2; f <= 2; f++) {
+      ctx.beginPath();
+      ctx.ellipse(
+        f * 4 * scale,
+        -6 * scale - Math.abs(f) * 1.5 * scale,
+        2.2 * scale,
+        8 * scale,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    }
+    ctx.restore();
   }
   return c;
 }
@@ -1003,6 +1094,101 @@ function _sceneFamilyWrong(ctx, ix, iy, iw, ih, rng, pal) {
   ctx.closePath();
   ctx.fill();
 }
+function _sceneCrackedMirror(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.42;
+  const rW = iw * 0.34,
+    rH = ih * 0.4;
+  ctx.fillStyle = pal.ink ? 'rgba(60,58,54,0.35)' : 'rgba(40,40,45,0.5)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rW, rH, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = pal.stroke;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  const shards = 6 + Math.floor(rng() * 4);
+  for (let i = 0; i < shards; i++) {
+    const a = rng() * Math.PI * 2;
+    const r0 = rW * (0.1 + rng() * 0.15);
+    const r1 = Math.max(rW, rH) * (0.75 + rng() * 0.3);
+    _sketchStroke(
+      ctx,
+      [
+        [cx + Math.cos(a) * r0, cy + Math.sin(a) * r0 * (rH / rW)],
+        [cx + Math.cos(a) * r1, cy + Math.sin(a) * r1 * (rH / rW)],
+      ],
+      { rng, color: pal.stroke, passes: 1, width: 1, jitter: 1.2 },
+    );
+  }
+  if (rng() < 0.6) {
+    const eyeY = cy - rH * 0.1;
+    ctx.fillStyle = pal.fill;
+    ctx.beginPath();
+    ctx.arc(cx - rW * 0.18, eyeY, rW * 0.05, 0, Math.PI * 2);
+    ctx.arc(cx + rW * 0.18, eyeY, rW * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+function _sceneWatchingWindow(ctx, ix, iy, iw, ih, rng, pal) {
+  const wW = iw * 0.5,
+    wH = ih * 0.5;
+  const wx = ix + (iw - wW) / 2,
+    wy = iy + ih * 0.16;
+  ctx.fillStyle = 'rgba(6,6,10,0.9)';
+  ctx.fillRect(wx, wy, wW, wH);
+  ctx.strokeStyle = pal.stroke;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(wx, wy, wW, wH);
+  ctx.beginPath();
+  ctx.moveTo(wx + wW / 2, wy);
+  ctx.lineTo(wx + wW / 2, wy + wH);
+  ctx.moveTo(wx, wy + wH / 2);
+  ctx.lineTo(wx + wW, wy + wH / 2);
+  ctx.stroke();
+  const eyeY = wy + wH * (0.4 + rng() * 0.15);
+  ctx.fillStyle = pal.ink ? 'rgba(210,205,190,0.9)' : '#e8e2c8';
+  ctx.beginPath();
+  ctx.ellipse(wx + wW * 0.5, eyeY, wW * 0.09, wH * 0.06, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = pal.stroke;
+  ctx.beginPath();
+  ctx.arc(wx + wW * 0.5, eyeY, wW * 0.03, 0, Math.PI * 2);
+  ctx.fill();
+  const sillY = wy + wH;
+  ctx.fillStyle = pal.fill;
+  ctx.fillRect(wx - 6, sillY, wW + 12, ih * 0.03);
+}
+function _sceneScreamingMouth(ctx, ix, iy, iw, ih, rng, pal) {
+  const cx = ix + iw / 2,
+    cy = iy + ih * 0.5;
+  const w = iw * 0.4,
+    h = ih * 0.5;
+  ctx.fillStyle = pal.ink ? 'rgba(30,10,10,0.65)' : '#2a0a0a';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h / 2);
+  ctx.quadraticCurveTo(cx - w / 2, cy - h * 0.1, cx - w * 0.28, cy + h / 2);
+  ctx.quadraticCurveTo(cx, cy + h * 0.62, cx + w * 0.28, cy + h / 2);
+  ctx.quadraticCurveTo(cx + w / 2, cy - h * 0.1, cx, cy - h / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = pal.bg;
+  const rows = 3;
+  for (let r = 0; r < rows; r++) {
+    const ty = cy - h * 0.28 + r * h * 0.22;
+    const tw = w * (0.66 - r * 0.1);
+    const count = 5 - r;
+    for (let i = 0; i < count; i++) {
+      const t = count === 1 ? 0.5 : i / (count - 1);
+      const x = cx - tw / 2 + t * tw;
+      ctx.beginPath();
+      ctx.moveTo(x - w * 0.02, ty);
+      ctx.lineTo(x + w * 0.02, ty);
+      ctx.lineTo(x, ty + h * 0.09);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+}
 const PAINTING_SCENE_FNS = {
   tall_figure: _sceneTallFigure,
   crouched_figure: _sceneCrouchedFigure,
@@ -1021,6 +1207,9 @@ const PAINTING_SCENE_FNS = {
   staircase: _sceneStaircase,
   teeth: _sceneTeeth,
   family_wrong: _sceneFamilyWrong,
+  cracked_mirror: _sceneCrackedMirror,
+  watching_window: _sceneWatchingWindow,
+  screaming_mouth: _sceneScreamingMouth,
 };
 function makePaintingCanvas(rng = Math.random) {
   const c = document.createElement('canvas');
@@ -2219,6 +2408,12 @@ export class MazeGame {
         roughness: 0.98,
         metalness: 0.01,
         color: 0xc9c4ba,
+        repeatX: 1.5,
+      }),
+      stained: this._makeWallMaterial(makeStainedStoneCanvas(rng), {
+        roughness: 0.97,
+        metalness: 0.01,
+        color: 0xcac5b8,
         repeatX: 1.5,
       }),
     };
@@ -3871,6 +4066,19 @@ export class MazeGame {
     this._torchNearFactor += (targetFactor - this._torchNearFactor) * t;
     this.torch.intensity *= this._torchNearFactor;
     this.torchGlow.intensity *= this._torchNearFactor;
+    if (this._flickerNextAt === undefined) {
+      this._flickerNextAt = (this.elapsed || 0) + 6 + Math.random() * 10;
+      this._flickerFactor = 1;
+      this._flickerUntil = 0;
+    }
+    const now = this.elapsed || 0;
+    if (now >= this._flickerNextAt && now >= this._flickerUntil) {
+      this._flickerUntil = now + 0.12 + Math.random() * 0.22;
+      this._flickerNextAt = now + 5 + Math.random() * 14;
+    }
+    this._flickerFactor = now < this._flickerUntil ? 0.35 + Math.random() * 0.35 : 1;
+    this.torch.intensity *= this._flickerFactor;
+    this.torchGlow.intensity *= this._flickerFactor;
   }
   _easeOutCubic(t) {
     return 1 - Math.pow(1 - t, 3);
