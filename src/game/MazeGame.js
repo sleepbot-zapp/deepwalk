@@ -2151,6 +2151,42 @@ export class MazeGame {
   interact() {
     this._tryInteractDoor();
   }
+  tapInteract(clientX, clientY) {
+    if (!this.running) return false;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const exitGroups = (this.exits || [])
+      .filter((e) => e.doorState === 'closed')
+      .map((e) => e.doorGroup);
+    const shortcutLeaves = (this.shortcutDoors || []).map((d) => d.leaf);
+    const targets = [...exitGroups, ...shortcutLeaves];
+    if (!targets.length) return false;
+    this._raycaster.setFromCamera(ndc, this.camera);
+    this._raycaster.far = Math.max(DOOR_LOOK_DIST, SHORTCUT_DOOR_LOOK_DIST);
+    const hits = this._raycaster.intersectObjects(targets, true);
+    if (!hits.length) return false;
+    const wallHits = this._raycaster.intersectObjects(this.wallMeshes, true);
+    if (wallHits.length && wallHits[0].distance < hits[0].distance - 0.05) return false;
+    let node = hits[0].object;
+    while (node && !node.userData.exitLetter) node = node.parent;
+    if (node && node.userData.exitLetter) {
+      const exit = this.exits.find((e) => e.letter === node.userData.exitLetter);
+      if (exit) {
+        this._openDoor(exit);
+        return true;
+      }
+    }
+    const shortcutDoor = this.shortcutDoors.find((d) => d.leaf === hits[0].object);
+    if (shortcutDoor) {
+      this._toggleShortcutDoor(shortcutDoor);
+      return true;
+    }
+    return false;
+  }
   _makeWallMaterial(canvas, opts = {}) {
     const tex = new THREE.CanvasTexture(canvas || this.stoneCanvas);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -3804,7 +3840,7 @@ export class MazeGame {
     if (
       !this.exits ||
       !this.exits.length ||
-      (!this.isTouchDevice && document.pointerLockElement !== this.renderer.domElement)
+      document.pointerLockElement !== this.renderer.domElement
     ) {
       this._setDoorLook(null);
       return;
@@ -3868,7 +3904,7 @@ export class MazeGame {
     if (
       !this.shortcutDoors ||
       !this.shortcutDoors.length ||
-      (!this.isTouchDevice && document.pointerLockElement !== this.renderer.domElement)
+      document.pointerLockElement !== this.renderer.domElement
     ) {
       this._shortcutDoorLookTarget = null;
       return;

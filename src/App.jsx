@@ -209,7 +209,7 @@ export default function App() {
           {exitToast && (
             <div className="exit-toast">EXIT {exitToast} FOUND</div>
           )}
-          {doorPrompt && !paused && (
+          {doorPrompt && !paused && !isTouchDevice && (
             <div className="door-prompt">
               <span className="door-prompt-key">E</span>
               {doorPrompt.kind === 'exit'
@@ -223,7 +223,6 @@ export default function App() {
           {isTouchDevice && !paused && (
             <TouchControls
               game={gameRef.current}
-              doorPrompt={doorPrompt}
               crouchOn={crouchOn}
               onCrouchChange={setCrouchOn}
             />
@@ -328,7 +327,7 @@ export default function App() {
             {isTouchDevice ? (
               <div className="keys">
                 <b>Left stick</b> move &nbsp;&middot;&nbsp; <b>drag</b> look &nbsp;&middot;&nbsp;{' '}
-                <b>JUMP / CROUCH</b> buttons &nbsp;&middot;&nbsp; <b>OPEN</b> door &nbsp;&middot;&nbsp; ⏸ pause
+                <b>JUMP / CROUCH</b> buttons &nbsp;&middot;&nbsp; <b>tap a door</b> to open/close &nbsp;&middot;&nbsp; ⏸ pause
               </div>
             ) : (
               <div className="keys">

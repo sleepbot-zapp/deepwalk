@@ -1,16 +1,17 @@
 import React, { useRef, useState, useCallback } from 'react';
 
-const JOYSTICK_RADIUS = 58; 
+const JOYSTICK_RADIUS = 58;
+const TAP_MAX_MOVE = 12;
+const TAP_MAX_DURATION = 350;
 
-export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChange }) {
-  const prompt =
-    doorPrompt && typeof doorPrompt === 'object' ? doorPrompt : doorPrompt ? { label: 'OPEN' } : null;
+export default function TouchControls({ game, crouchOn, onCrouchChange }) {
   const [stickPos, setStickPos] = useState({ x: 0, y: 0 });
   const stickBaseRef = useRef(null);
   const stickPointerId = useRef(null);
 
   const lookPointerId = useRef(null);
   const lookLast = useRef({ x: 0, y: 0 });
+  const lookStart = useRef({ x: 0, y: 0, t: 0 });
 
   const updateStick = useCallback(
     (clientX, clientY) => {
@@ -60,6 +61,7 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     if (lookPointerId.current !== null) return;
     lookPointerId.current = e.pointerId;
     lookLast.current = { x: e.clientX, y: e.clientY };
+    lookStart.current = { x: e.clientX, y: e.clientY, t: performance.now() };
     e.currentTarget.setPointerCapture(e.pointerId);
   }, []);
 
@@ -74,10 +76,26 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     [game],
   );
 
-  const onLookUp = useCallback((e) => {
+  const onLookUp = useCallback(
+    (e) => {
+      if (lookPointerId.current !== e.pointerId) return;
+      lookPointerId.current = null;
+      const dx = e.clientX - lookStart.current.x;
+      const dy = e.clientY - lookStart.current.y;
+      const moved = Math.hypot(dx, dy);
+      const duration = performance.now() - lookStart.current.t;
+      if (moved <= TAP_MAX_MOVE && duration <= TAP_MAX_DURATION) {
+        game?.tapInteract(e.clientX, e.clientY);
+      }
+    },
+    [game],
+  );
+
+  const onLookCancel = useCallback((e) => {
     if (lookPointerId.current !== e.pointerId) return;
     lookPointerId.current = null;
   }, []);
+
   const onJumpDown = useCallback(
     (e) => {
       e.preventDefault();
@@ -96,14 +114,6 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
     [game, crouchOn, onCrouchChange],
   );
 
-  const onInteractDown = useCallback(
-    (e) => {
-      e.preventDefault();
-      game?.interact();
-    },
-    [game],
-  );
-
   return (
     <>
       <div
@@ -111,7 +121,7 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
         onPointerDown={onLookDown}
         onPointerMove={onLookMove}
         onPointerUp={onLookUp}
-        onPointerCancel={onLookUp}
+        onPointerCancel={onLookCancel}
       />
 
       <div
@@ -129,17 +139,6 @@ export default function TouchControls({ game, doorPrompt, crouchOn, onCrouchChan
       </div>
 
       <div className="touch-action-buttons">
-        {prompt && (
-          <button
-            type="button"
-            className={`touch-btn touch-btn-interact ${
-              prompt.label === 'CLOSE' ? 'touch-btn-interact-close' : 'touch-btn-interact-open'
-            }`}
-            onPointerDown={onInteractDown}
-          >
-            {prompt.label}
-          </button>
-        )}
         <button
           type="button"
           className={`touch-btn touch-btn-crouch ${crouchOn ? 'active' : ''}`}
