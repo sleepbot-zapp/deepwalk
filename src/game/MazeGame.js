@@ -3095,36 +3095,67 @@ export class MazeGame {
       return this.maze[cy][cx].elevation || 0;
     return this.maze[ny][nx].elevation || 0;
   }
+  _hurdleTopSupportAt(px, pz) {
+    if (!this.maze) return null;
+    const { cx, cy } = this._cellCoordsFor(px, pz);
+    const relX = px - this.mazeOrigin.x;
+    const relZ = pz - this.mazeOrigin.z;
+    const localX = relX - cx * CELL;
+    const localZ = relZ - cy * CELL;
+    const halfAlong = (CELL * 0.8) / 2;
+    const halfDepth = HURDLE_DEPTH / 2 + COLLIDE_RADIUS;
+    const dirs = ['n', 's', 'w', 'e'];
+    for (const dir of dirs) {
+      const info = this._hurdleInfoAt(cx, cy, dir);
+      if (!info) continue;
+      if (dir === 'n' || dir === 's') {
+        const borderLocalZ = dir === 'n' ? 0 : CELL;
+        if (Math.abs(localZ - borderLocalZ) > halfDepth) continue;
+        if (Math.abs(localX - CELL / 2) > halfAlong) continue;
+      } else {
+        const borderLocalX = dir === 'w' ? 0 : CELL;
+        if (Math.abs(localX - borderLocalX) > halfDepth) continue;
+        if (Math.abs(localZ - CELL / 2) > halfAlong) continue;
+      }
+      return info.floorY + HURDLE_HEIGHT;
+    }
+    return null;
+  }
   _floorHeightAt(px, pz) {
     if (!this.maze) return 0;
     const { cx, cy } = this._cellCoordsFor(px, pz);
     const cell = this.maze[cy][cx];
     const ownElev = cell.elevation || 0;
-    if (!cell.rampDir) return ownElev * STEP_HEIGHT;
-    const relX = px - this.mazeOrigin.x;
-    const relZ = pz - this.mazeOrigin.z;
-    const localX = relX - cx * CELL;
-    const localZ = relZ - cy * CELL;
-    const neighborElev = this._neighborElevationFor(cx, cy, cell.rampDir);
-    let t;
-    switch (cell.rampDir) {
-      case 'n':
-        t = 1 - localZ / CELL;
-        break;
-      case 's':
-        t = localZ / CELL;
-        break;
-      case 'w':
-        t = 1 - localX / CELL;
-        break;
-      case 'e':
-        t = localX / CELL;
-        break;
-      default:
-        t = 0;
+    let floor;
+    if (!cell.rampDir) {
+      floor = ownElev * STEP_HEIGHT;
+    } else {
+      const relX = px - this.mazeOrigin.x;
+      const relZ = pz - this.mazeOrigin.z;
+      const localX = relX - cx * CELL;
+      const localZ = relZ - cy * CELL;
+      const neighborElev = this._neighborElevationFor(cx, cy, cell.rampDir);
+      let t;
+      switch (cell.rampDir) {
+        case 'n':
+          t = 1 - localZ / CELL;
+          break;
+        case 's':
+          t = localZ / CELL;
+          break;
+        case 'w':
+          t = 1 - localX / CELL;
+          break;
+        case 'e':
+          t = localX / CELL;
+          break;
+        default:
+          t = 0;
+      }
+      t = Math.max(0, Math.min(1, t));
+      floor = (ownElev + (neighborElev - ownElev) * t) * STEP_HEIGHT;
     }
-    t = Math.max(0, Math.min(1, t));
-    return (ownElev + (neighborElev - ownElev) * t) * STEP_HEIGHT;
+    return floor;
   }
   _buildPortalBackPanel(holeW, holeH, panelBottom, panelTop) {
     const w = CELL;
@@ -3778,11 +3809,22 @@ export class MazeGame {
     this.grounded = false;
   }
   _updateJump(dt) {
-    if (this.grounded) return;
+    const baseFloor = this._floorHeightAt(this.player.x, this.player.z);
+    const hurdleTop = this._hurdleTopSupportAt(this.player.x, this.player.z);
+    const groundOffset = hurdleTop !== null && hurdleTop > baseFloor ? hurdleTop - baseFloor : 0;
+    if (this.grounded) {
+      if (this.verticalOffset > groundOffset + 0.001) {
+        // The support that was under us (e.g. a hurdle) is no longer there: start falling.
+        this.grounded = false;
+      } else {
+        this.verticalOffset = groundOffset;
+        return;
+      }
+    }
     this.verticalVelocity -= GRAVITY * dt;
     this.verticalOffset += this.verticalVelocity * dt;
-    if (this.verticalOffset <= 0) {
-      this.verticalOffset = 0;
+    if (this.verticalOffset <= groundOffset) {
+      this.verticalOffset = groundOffset;
       this.verticalVelocity = 0;
       this.grounded = true;
     }
