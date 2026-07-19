@@ -510,10 +510,6 @@ button:hover {
   color: rgba(232, 228, 218, 0.7);
 }
 
-/* ---------------------------------------------------------------- */
-/* Touch controls                                                    */
-/* ---------------------------------------------------------------- */
-
 .pause-btn {
   pointer-events: auto;
   padding: 6px 14px;
@@ -528,8 +524,6 @@ button:hover {
   inset: 0;
   z-index: 3;
   touch-action: none;
-  /* deliberately transparent — this just captures drag gestures for
-     camera look, underneath the joystick/buttons which sit on top */
 }
 
 .touch-joystick-base {

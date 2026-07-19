@@ -218,16 +218,6 @@ export default function App() {
           {exitToast && (
             <div className="exit-toast">EXIT {exitToast} FOUND</div>
           )}
-          {doorPrompt && !paused && !isTouchDevice && (
-            <div className="door-prompt">
-              <span className="door-prompt-key">E</span>
-              {doorPrompt.kind === 'exit'
-                ? `open the door to ${doorPrompt.nextLabel}`
-                : doorPrompt.label === 'CLOSE'
-                ? 'close the door'
-                : 'open the door'}
-            </div>
-          )}
 
           {isTouchDevice && !paused && (
             <TouchControls
