@@ -1885,6 +1885,2625 @@ function makeRampGeometry(size, ownY, neighborY, dir) {
   geo.computeVertexNormals();
   return geo;
 }
+
+const REGION_WEIGHTS = {
+  house: 0.34, office: 0.26, cave: 0.22, maintenance: 0.18,
+  library: 0.16, pool: 0.1, sewer: 0.12, crypt: 0.1,
+};
+const REGION_FOG = {
+  house: 0x020101, office: 0x0b0a03, cave: 0x010204, maintenance: 0x020603, deepcave: 0x000000,
+  library: 0x0a0402, pool: 0x04181a, sewer: 0x030b04, crypt: 0x060409,
+};
+
+
+
+const REGION_COMPAT = {
+  house: ['office', 'maintenance', 'library'],
+  office: ['house', 'maintenance', 'library', 'pool'],
+  library: ['house', 'office', 'crypt'],
+  maintenance: ['house', 'office', 'cave', 'sewer', 'pool'],
+  sewer: ['maintenance', 'cave', 'crypt'],
+  pool: ['office', 'maintenance'],
+  crypt: ['cave', 'library', 'sewer'],
+  cave: ['maintenance', 'sewer', 'crypt'],
+};
+
+const REGION_BUFFERED = new Set(['cave', 'sewer', 'crypt', 'pool']);
+const BLEND_WIDTH = 8; 
+const CAVE_CEIL = 1.4; 
+const BLEND_CH = { wall: 0, floor: 1, ceil: 2, light: 3, decor: 4 };
+
+
+const POOL_SIZE = 5; 
+const LIGHT_INTENSITY = 18;
+const LIGHT_DISTANCE = 9;
+
+const LANTERN_BODY_H = 0.36;
+const LANTERN_MAX_DROP = 4.0; 
+const LANTERN_MIN_CHAIN = 0.25; 
+const PANEL_W = 1.3;
+const PANEL_D = 0.45;
+
+const LIGHT_CFG = {
+  house: { kind: 'lantern', lattice: 0.5, room: 0.45, stray: 0.03, dead: 0.18, flicker: 0.14 },
+  office: { kind: 'panel', lattice: 0.6, room: 0.5, stray: 0.06, dead: 0.22, flicker: 0.3 },
+  maintenance: { kind: 'bulb', lattice: 0.5, room: 0.5, stray: 0.05, dead: 0.2, flicker: 0.35 },
+  cave: { kind: 'torch', wall: 0.3 },
+  library: { kind: 'lantern', lattice: 0.4, room: 0.55, stray: 0.05, dead: 0.25, flicker: 0.2 },
+  pool: { kind: 'panel', lattice: 0.7, room: 0.6, stray: 0.1, dead: 0.12, flicker: 0.25 },
+  sewer: { kind: 'bulb', lattice: 0.4, room: 0.4, stray: 0.05, dead: 0.35, flicker: 0.5 },
+  crypt: { kind: 'torch', wall: 0.2 },
+  deepcave: null, 
+};
+
+const DIRS = {
+  n: { dx: 0, dy: -1, opp: 's', ix: 0, iz: 1, ex: 0, ez: -1 },
+  s: { dx: 0, dy: 1, opp: 'n', ix: 0, iz: -1, ex: 0, ez: 1 },
+  w: { dx: -1, dy: 0, opp: 'e', ix: 1, iz: 0, ex: -1, ez: 0 },
+  e: { dx: 1, dy: 0, opp: 'w', ix: -1, iz: 0, ex: 1, ez: 0 },
+};
+const DIR_KEYS = ['n', 's', 'w', 'e'];
+const cap = (d) => d.toUpperCase();
+
+const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/* ------------------------------ canvases --------------------------- */
+
+function mkCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return [c, c.getContext('2d')];
+}
+function speckle(ctx, w, h, rng, count, minL, maxL, alpha) {
+  for (let i = 0; i < count; i++) {
+    const l = Math.floor(minL + rng() * (maxL - minL));
+    ctx.fillStyle = `rgba(${l},${l},${l},${alpha * (0.4 + rng() * 0.6)})`;
+    ctx.fillRect(rng() * w, rng() * h, 1 + rng() * 2, 1 + rng() * 2);
+  }
+}
+function stain(ctx, x, y, r, rgb, a) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(${rgb},${a})`);
+  g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(x - r, y - r, r * 2, r * 2);
+}
+function makeOfficeWallCanvas(rng, dirty) {
+  const [c, ctx] = mkCanvas(256, 256);
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, '#a7a06a');
+  g.addColorStop(1, '#b8b17b');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#9a935f';
+  ctx.fillRect(0, 150, 256, 106); 
+  ctx.fillStyle = '#7c7649';
+  ctx.fillRect(0, 146, 256, 5); 
+  ctx.fillStyle = '#5f5a38';
+  ctx.fillRect(0, 240, 256, 16); 
+  speckle(ctx, 256, 256, rng, 900, 60, 200, 0.08);
+  const stains = dirty ? 9 : 4;
+  for (let i = 0; i < stains; i++) {
+    stain(ctx, rng() * 256, rng() * 200, 20 + rng() * 45, dirty && rng() < 0.4 ? '40,45,25' : '80,62,25', 0.12 + rng() * 0.18);
+  }
+  for (let i = 0; i < 6; i++) {
+    const x = rng() * 256;
+    const lg = ctx.createLinearGradient(0, 0, 0, 200);
+    lg.addColorStop(0, 'rgba(70,55,25,0.22)');
+    lg.addColorStop(1, 'rgba(70,55,25,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(x, 0, 2 + rng() * 5, 200);
+  }
+  return c;
+}
+function makeCaveRockCanvas(rng, dark) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = dark ? '#1d1a18' : '#2c2825';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 280; i++) {
+    const l = Math.floor(10 + rng() * (dark ? 40 : 65));
+    ctx.fillStyle = `rgba(${l + 6},${l + 3},${l},${0.15 + rng() * 0.35})`;
+    ctx.beginPath();
+    ctx.ellipse(rng() * 256, rng() * 256, 5 + rng() * 34, 3 + rng() * 22, rng() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  for (let i = 0; i < 12; i++) {
+    ctx.lineWidth = 1 + rng() * 1.5;
+    ctx.beginPath();
+    let x = rng() * 256;
+    let y = rng() * 256;
+    ctx.moveTo(x, y);
+    for (let k = 0; k < 6; k++) {
+      x += (rng() - 0.5) * 40;
+      y += (rng() - 0.3) * 40;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  speckle(ctx, 256, 256, rng, 700, 20, 120, 0.12);
+  return c;
+}
+function makeConcreteCanvas(rng, hazard, dark) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = dark ? '#33352f' : '#4b4d48';
+  ctx.fillRect(0, 0, 256, 256);
+  speckle(ctx, 256, 256, rng, 1400, 30, 150, 0.1);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(0, 126, 256, 2);
+  ctx.fillRect(127, 0, 2, 126);
+  for (let i = 0; i < 12; i++) {
+    const x = rng() * 256;
+    const lg = ctx.createLinearGradient(0, 0, 0, 120 + rng() * 120);
+    lg.addColorStop(0, 'rgba(125,62,28,0.4)');
+    lg.addColorStop(1, 'rgba(125,62,28,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(x, rng() * 60, 3 + rng() * 14, 240);
+  }
+  for (let i = 0; i < 4; i++) stain(ctx, rng() * 256, rng() * 256, 25 + rng() * 40, '15,18,14', 0.3);
+  if (hazard) {
+    const y0 = 218;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, y0, 256, 26);
+    ctx.clip();
+    ctx.fillStyle = '#c9a227';
+    ctx.fillRect(0, y0, 256, 26);
+    ctx.fillStyle = '#141414';
+    for (let x = -40; x < 300; x += 32) {
+      ctx.beginPath();
+      ctx.moveTo(x, y0);
+      ctx.lineTo(x + 16, y0);
+      ctx.lineTo(x + 16 - 26, y0 + 26);
+      ctx.lineTo(x - 26, y0 + 26);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(0, y0, 256, 26);
+  }
+  return c;
+}
+function makeCarpetCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  for (let ty = 0; ty < 4; ty++) {
+    for (let tx = 0; tx < 4; tx++) {
+      const l = 52 + Math.floor(rng() * 14);
+      ctx.fillStyle = `rgb(${l - 6},${l + 8},${l + 6})`;
+      ctx.fillRect(tx * 64, ty * 64, 64, 64);
+    }
+  }
+  speckle(ctx, 256, 256, rng, 3500, 20, 110, 0.14);
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 64, 0);
+    ctx.lineTo(i * 64, 256);
+    ctx.moveTo(0, i * 64);
+    ctx.lineTo(256, i * 64);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 4; i++) stain(ctx, rng() * 256, rng() * 256, 14 + rng() * 26, '20,16,10', 0.35);
+  return c;
+}
+function makeRockFloorCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = '#211f1c';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 160; i++) {
+    const l = 20 + Math.floor(rng() * 40);
+    ctx.fillStyle = `rgba(${l + 5},${l + 2},${l},${0.25 + rng() * 0.4})`;
+    ctx.beginPath();
+    ctx.ellipse(rng() * 256, rng() * 256, 2 + rng() * 14, 2 + rng() * 9, rng() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  speckle(ctx, 256, 256, rng, 1200, 10, 110, 0.15);
+  return c;
+}
+function makeConcreteFloorCanvas(rng) {
+  const c = makeConcreteCanvas(rng, false, true);
+  const ctx = c.getContext('2d');
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    let x = rng() * 256;
+    let y = rng() * 256;
+    ctx.moveTo(x, y);
+    for (let k = 0; k < 5; k++) {
+      x += (rng() - 0.5) * 60;
+      y += (rng() - 0.5) * 60;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  return c;
+}
+function makePlankFloorCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  for (let i = 0; i < 8; i++) {
+    const l = 46 + Math.floor(rng() * 22);
+    ctx.fillStyle = `rgb(${l + 14},${l},${l - 14})`;
+    ctx.fillRect(0, i * 32, 256, 32);
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, i * 32);
+    ctx.lineTo(256, i * 32);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+    ctx.lineWidth = 1;
+    for (let k = 0; k < 5; k++) {
+      const y = i * 32 + 4 + rng() * 24;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(256, y + (rng() - 0.5) * 4);
+      ctx.stroke();
+    }
+    const jx = rng() * 256;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(jx, i * 32, 2, 32);
+  }
+  for (let i = 0; i < 5; i++) stain(ctx, rng() * 256, rng() * 256, 20 + rng() * 30, '10,8,5', 0.35);
+  speckle(ctx, 256, 256, rng, 600, 10, 90, 0.12);
+  return c;
+}
+function makeCeilingTileCanvas(rng) {
+  const [c, ctx] = mkCanvas(128, 128);
+  ctx.fillStyle = '#9a977f';
+  ctx.fillRect(0, 0, 128, 128);
+  speckle(ctx, 128, 128, rng, 700, 60, 170, 0.15);
+  for (let i = 0; i < 40; i++) {
+    ctx.fillStyle = 'rgba(60,58,44,0.35)';
+    ctx.fillRect(rng() * 128, rng() * 128, 1, 1 + rng() * 3);
+  }
+  ctx.strokeStyle = '#4f4d3d';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(0, 0, 128, 128);
+  return c;
+}
+function makeRugCanvas(rng) {
+  const [c, ctx] = mkCanvas(128, 80);
+  ctx.fillStyle = '#b9b0a0';
+  ctx.fillRect(0, 0, 128, 80);
+  ctx.strokeStyle = '#f0e6d0';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(7, 7, 114, 66);
+  ctx.strokeStyle = '#8f8676';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(14, 14, 100, 52);
+  ctx.fillStyle = '#d9cfb8';
+  for (let i = 0; i < 5; i++) {
+    const cx = 24 + i * 20;
+    ctx.beginPath();
+    ctx.moveTo(cx, 40 - 14);
+    ctx.lineTo(cx + 9, 40);
+    ctx.lineTo(cx, 40 + 14);
+    ctx.lineTo(cx - 9, 40);
+    ctx.closePath();
+    ctx.fill();
+  }
+  speckle(ctx, 128, 80, rng, 300, 60, 200, 0.12);
+  return c;
+}
+/* ---- library ---- */
+function makeLibraryWallCanvas(rng, dirty) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = '#4b2c27';
+  ctx.fillRect(0, 0, 256, 256);
+  
+  ctx.strokeStyle = 'rgba(120,70,55,0.35)';
+  ctx.lineWidth = 2;
+  for (let i = -256; i < 512; i += 32) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + 256, 256);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(i, 256);
+    ctx.lineTo(i + 256, 0);
+    ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(160,105,72,0.3)';
+  for (let b = 0; b < 10; b++) {
+    for (let a = 0; a < 16; a++) {
+      if ((a + b) % 2) continue;
+      const x = a * 16;
+      const y = b * 16;
+      ctx.beginPath();
+      ctx.moveTo(x, y - 6);
+      ctx.lineTo(x + 4, y);
+      ctx.lineTo(x, y + 6);
+      ctx.lineTo(x - 4, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  ctx.fillStyle = '#2a1b14'; 
+  ctx.fillRect(0, 150, 256, 106);
+  ctx.fillStyle = '#170f0a';
+  ctx.fillRect(0, 146, 256, 6);
+  ctx.fillRect(0, 0, 256, 10); 
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 4; i++) ctx.strokeRect(8 + i * 64, 164, 48, 68);
+  speckle(ctx, 256, 256, rng, 800, 40, 150, 0.08);
+  const n = dirty ? 9 : 4;
+  for (let i = 0; i < n; i++) stain(ctx, rng() * 256, rng() * 200, 20 + rng() * 45, '20,12,8', 0.16 + rng() * 0.2);
+  if (dirty) {
+    for (let i = 0; i < 7; i++) {
+      const x = rng() * 256;
+      const lg = ctx.createLinearGradient(0, 10, 0, 160);
+      lg.addColorStop(0, 'rgba(25,14,8,0.4)');
+      lg.addColorStop(1, 'rgba(25,14,8,0)');
+      ctx.fillStyle = lg;
+      ctx.fillRect(x, 10, 2 + rng() * 6, 150);
+    }
+  }
+  return c;
+}
+function makeLibraryFloorCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  for (let ty = 0; ty < 4; ty++) {
+    for (let tx = 0; tx < 4; tx++) {
+      const horiz = (tx + ty) % 2 === 0;
+      for (let k = 0; k < 8; k++) {
+        const l = 30 + Math.floor(rng() * 16);
+        ctx.fillStyle = `rgb(${l + 18},${l + 5},${l - 6})`;
+        if (horiz) ctx.fillRect(tx * 64, ty * 64 + k * 8, 64, 8);
+        else ctx.fillRect(tx * 64 + k * 8, ty * 64, 8, 64);
+      }
+    }
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 32; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 8, 0);
+    ctx.lineTo(i * 8, 256);
+    ctx.moveTo(0, i * 8);
+    ctx.lineTo(256, i * 8);
+    ctx.stroke();
+  }
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 64, 0);
+    ctx.lineTo(i * 64, 256);
+    ctx.moveTo(0, i * 64);
+    ctx.lineTo(256, i * 64);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 5; i++) stain(ctx, rng() * 256, rng() * 256, 20 + rng() * 34, '8,5,3', 0.35);
+  speckle(ctx, 256, 256, rng, 700, 10, 90, 0.12);
+  return c;
+}
+function makeLibraryCeilingCanvas(rng) {
+  const [c, ctx] = mkCanvas(128, 128);
+  ctx.fillStyle = '#20140e';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.fillStyle = '#120a06'; 
+  ctx.fillRect(0, 0, 128, 10);
+  ctx.fillRect(0, 0, 10, 128);
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(20, 20, 98, 98);
+  speckle(ctx, 128, 128, rng, 500, 10, 80, 0.15);
+  stain(ctx, rng() * 128, rng() * 128, 30, '6,4,2', 0.4);
+  return c;
+}
+
+/* ---- poolrooms ---- */
+function makePoolWallCanvas(rng, dirty) {
+  const [c, ctx] = mkCanvas(256, 256);
+  for (let ty = 0; ty < 16; ty++) {
+    for (let tx = 0; tx < 16; tx++) {
+      const v = Math.floor(rng() * 16) - 8;
+      ctx.fillStyle = `rgb(${142 + v},${184 + v},${182 + v})`;
+      ctx.fillRect(tx * 16, ty * 16, 16, 16);
+    }
+  }
+  ctx.fillStyle = '#2b6f7a'; 
+  ctx.fillRect(0, 96, 256, 32);
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.fillRect(0, 96, 256, 32);
+  ctx.strokeStyle = 'rgba(55,78,78,0.65)'; 
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i <= 16; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 16, 0);
+    ctx.lineTo(i * 16, 256);
+    ctx.moveTo(0, i * 16);
+    ctx.lineTo(256, i * 16);
+    ctx.stroke();
+  }
+  const n = dirty ? 9 : 4;
+  for (let i = 0; i < n; i++) stain(ctx, rng() * 256, 140 + rng() * 116, 20 + rng() * 40, '30,80,50', 0.22 + rng() * 0.15);
+  ctx.strokeStyle = 'rgba(15,25,25,0.6)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < (dirty ? 5 : 2); i++) {
+    ctx.beginPath();
+    let x = rng() * 256;
+    let y = rng() * 256;
+    ctx.moveTo(x, y);
+    for (let k = 0; k < 5; k++) {
+      x += (rng() - 0.5) * 30;
+      y += rng() * 30;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  speckle(ctx, 256, 256, rng, 700, 40, 170, 0.08);
+  return c;
+}
+function makePoolFloorCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  for (let ty = 0; ty < 16; ty++) {
+    for (let tx = 0; tx < 16; tx++) {
+      const v = Math.floor(rng() * 18) - 9;
+      const dark = (tx + ty) % 2 === 0 ? 0 : 10;
+      ctx.fillStyle = `rgb(${112 + v - dark},${160 + v - dark},${162 + v - dark})`;
+      ctx.fillRect(tx * 16, ty * 16, 16, 16);
+    }
+  }
+  ctx.strokeStyle = 'rgba(40,58,58,0.7)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i <= 16; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 16, 0);
+    ctx.lineTo(i * 16, 256);
+    ctx.moveTo(0, i * 16);
+    ctx.lineTo(256, i * 16);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 6; i++) stain(ctx, rng() * 256, rng() * 256, 18 + rng() * 36, '25,70,45', 0.28);
+  speckle(ctx, 256, 256, rng, 800, 20, 130, 0.1);
+  return c;
+}
+function makePoolCeilingCanvas(rng) {
+  const [c, ctx] = mkCanvas(128, 128);
+  ctx.fillStyle = '#a9b8b4';
+  ctx.fillRect(0, 0, 128, 128);
+  speckle(ctx, 128, 128, rng, 500, 80, 190, 0.12);
+  ctx.strokeStyle = 'rgba(40,60,60,0.55)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 32, 0);
+    ctx.lineTo(i * 32, 128);
+    ctx.moveTo(0, i * 32);
+    ctx.lineTo(128, i * 32);
+    ctx.stroke();
+  }
+  stain(ctx, rng() * 128, rng() * 128, 26, '40,80,60', 0.25);
+  return c;
+}
+
+/* ---- sewer ---- */
+function makeSewerWallCanvas(rng, dark) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = dark ? '#111210' : '#1a1b16'; 
+  ctx.fillRect(0, 0, 256, 256);
+  const rowH = 21;
+  for (let r = 0; r * rowH < 256; r++) {
+    const off = r % 2 ? 16 : 0;
+    for (let x = -off; x < 256; x += 32) {
+      const l = 38 + Math.floor(rng() * (dark ? 20 : 32));
+      ctx.fillStyle = `rgb(${l + 9},${l + 4},${l - 3})`;
+      ctx.fillRect(x + 1, r * rowH + 1, 30, rowH - 2);
+    }
+  }
+  for (let i = 0; i < 16; i++) {
+    const y0 = rng() * 90;
+    const lg = ctx.createLinearGradient(0, y0, 0, y0 + 90 + rng() * 120);
+    lg.addColorStop(0, 'rgba(70,125,50,0.5)');
+    lg.addColorStop(1, 'rgba(70,125,50,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(rng() * 256, y0, 2 + rng() * 10, 220);
+  }
+  const wl = ctx.createLinearGradient(0, 170, 0, 256); 
+  wl.addColorStop(0, 'rgba(20,55,28,0)');
+  wl.addColorStop(1, 'rgba(20,62,32,0.7)');
+  ctx.fillStyle = wl;
+  ctx.fillRect(0, 170, 256, 86);
+  for (let i = 0; i < 4; i++) stain(ctx, rng() * 256, rng() * 256, 25 + rng() * 40, '8,12,8', 0.35);
+  speckle(ctx, 256, 256, rng, 900, 20, 110, 0.1);
+  return c;
+}
+function makeSewerFloorCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = '#121410';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 150; i++) {
+    const l = 30 + Math.floor(rng() * 34);
+    ctx.fillStyle = `rgba(${l + 5},${l + 4},${l - 2},${0.6 + rng() * 0.4})`;
+    ctx.beginPath();
+    ctx.ellipse(rng() * 256, rng() * 256, 6 + rng() * 14, 5 + rng() * 10, rng() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < 70; i++) {
+    ctx.fillStyle = `rgba(50,95,40,${0.1 + rng() * 0.2})`;
+    ctx.beginPath();
+    ctx.ellipse(rng() * 256, rng() * 256, 3 + rng() * 10, 2 + rng() * 7, rng() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < 4; i++) stain(ctx, rng() * 256, rng() * 256, 22 + rng() * 34, '6,10,6', 0.4);
+  speckle(ctx, 256, 256, rng, 900, 10, 100, 0.12);
+  return c;
+}
+
+/* ---- crypt ---- */
+function makeCryptWallCanvas(rng, dark) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = '#110f0d'; 
+  ctx.fillRect(0, 0, 256, 256);
+  let y = 0;
+  while (y < 256) {
+    const h = 22 + Math.floor(rng() * 20);
+    let x = -rng() * 30;
+    while (x < 256) {
+      const w = 30 + Math.floor(rng() * 40);
+      const l = (dark ? 28 : 40) + Math.floor(rng() * (dark ? 22 : 30));
+      ctx.fillStyle = `rgb(${l + 7},${l + 4},${l - 1})`;
+      ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+      x += w;
+    }
+    y += h;
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  for (let i = 0; i < 8; i++) {
+    ctx.lineWidth = 1 + rng() * 1.2;
+    ctx.beginPath();
+    let x = rng() * 256;
+    let yy = rng() * 256;
+    ctx.moveTo(x, yy);
+    for (let k = 0; k < 5; k++) {
+      x += (rng() - 0.5) * 24;
+      yy += rng() * 30;
+      ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < 6; i++) {
+    const lg = ctx.createLinearGradient(0, 0, 0, 200);
+    lg.addColorStop(0, 'rgba(18,22,20,0.45)');
+    lg.addColorStop(1, 'rgba(18,22,20,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(rng() * 256, rng() * 40, 3 + rng() * 10, 210);
+  }
+  for (let i = 0; i < 4; i++) stain(ctx, rng() * 256, rng() * 256, 25 + rng() * 40, '8,8,10', 0.32);
+  speckle(ctx, 256, 256, rng, 900, 20, 130, 0.1);
+  return c;
+}
+function makeCryptFloorCanvas(rng) {
+  const [c, ctx] = mkCanvas(256, 256);
+  ctx.fillStyle = '#0e0d0b';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let r = 0; r < 4; r++) {
+    let x = -rng() * 40;
+    while (x < 256) {
+      const w = 50 + Math.floor(rng() * 40);
+      const l = 34 + Math.floor(rng() * 22);
+      ctx.fillStyle = `rgb(${l + 6},${l + 3},${l - 2})`;
+      ctx.fillRect(x + 1.5, r * 64 + 1.5, w - 3, 61);
+      x += w;
+    }
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    let x = rng() * 256;
+    let y = rng() * 256;
+    ctx.moveTo(x, y);
+    for (let k = 0; k < 4; k++) {
+      x += (rng() - 0.5) * 50;
+      y += (rng() - 0.5) * 50;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < 5; i++) stain(ctx, rng() * 256, rng() * 256, 20 + rng() * 36, '6,6,6', 0.4);
+  speckle(ctx, 256, 256, rng, 1100, 20, 140, 0.13);
+  return c;
+}
+
+function makeWebCanvas() {
+  const [c, ctx] = mkCanvas(128, 128);
+  ctx.strokeStyle = 'rgba(232,232,222,0.8)';
+  ctx.lineWidth = 1;
+  const R = 126;
+  for (let a = 0; a <= 6; a++) {
+    const ang = (a / 6) * (Math.PI / 2);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(ang) * R, Math.sin(ang) * R);
+    ctx.stroke();
+  }
+  [22, 40, 60, 82, 106].forEach((r) => {
+    ctx.beginPath();
+    for (let a = 0; a <= 6; a++) {
+      const ang = (a / 6) * (Math.PI / 2);
+      const rr = r - (a % 2 === 1 ? 5 : 0);
+      const px = Math.cos(ang) * rr;
+      const py = Math.sin(ang) * rr;
+      if (a === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  });
+  return c;
+}
+
+/* ------------------------- instancing helper ----------------------- */
+
+/**
+ * Organic stalagmite/stalactite: unit height, base radius 1, base at y=-0.5, tip at y=+0.5
+ * (same footprint as the old cone, so scale/rotation settings keep working).
+ * Concave taper, flared base, lumpy ridges and a slight bend; a few seeded variants.
+ */
+function makeStalagGeometry(seed) {
+  const RINGS = 10;
+  const SEG = 9;
+  const hash = (i) => {
+    const s = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  const bendX = (hash(1) - 0.5) * 0.3;
+  const bendZ = (hash(2) - 0.5) * 0.3;
+  const pos = [];
+  for (let r = 0; r <= RINGS; r++) {
+    const t = r / RINGS;
+    let rad = Math.pow(1 - t, 1.7); 
+    rad *= 1 + Math.max(0, 0.22 - t) * 3.2; 
+    rad *= 1 + (hash(50 + r) - 0.5) * 0.25 * (1 - t); 
+    const y = t - 0.5;
+    const cx = bendX * t * t;
+    const cz = bendZ * t * t;
+    for (let s = 0; s < SEG; s++) {
+      const a = (s / SEG) * Math.PI * 2;
+      const ridge = 1 + 0.14 * Math.sin(a * 3 + seed * 2) + (hash(r * 31 + s) - 0.5) * 0.32 * (1 - t * 0.6);
+      pos.push(cx + Math.cos(a) * rad * ridge, y, cz + Math.sin(a) * rad * ridge);
+    }
+  }
+  const idx = [];
+  for (let r = 0; r < RINGS; r++) {
+    for (let s = 0; s < SEG; s++) {
+      const s1 = (s + 1) % SEG;
+      const a = r * SEG + s;
+      const a1 = r * SEG + s1;
+      const b = (r + 1) * SEG + s;
+      const b1 = (r + 1) * SEG + s1;
+      idx.push(a, b, a1, a1, b, b1);
+    }
+  }
+  
+  const baseCenter = pos.length / 3;
+  pos.push(0, -0.5, 0);
+  for (let s = 0; s < SEG; s++) idx.push(baseCenter, s, (s + 1) % SEG);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+class Batch {
+  constructor(manager, group) {
+    this.mgr = manager;
+    this.group = group;
+    this.map = new Map();
+    
+    this.cur = null;
+  }
+  add(geoKey, matKey, x, y, z, o = {}) {
+    if (geoKey === 'stalag') geoKey = `stalag${Math.floor(Math.abs(x * 12.9898 + z * 78.233)) % 4}`;
+    const key = `${geoKey}|${matKey}`;
+    let b = this.map.get(key);
+    if (!b) {
+      b = { geoKey, matKey, items: [], hasColor: false, mesh: null };
+      this.map.set(key, b);
+    }
+    b.items.push({
+      x, y, z,
+      rx: o.rx || 0, ry: o.ry || 0, rz: o.rz || 0,
+      sx: o.sx ?? 1, sy: o.sy ?? 1, sz: o.sz ?? 1,
+      color: o.color ?? null,
+      matrix: o.matrix ?? null,
+      edges: o.edges ?? null,
+      
+      
+      cell: this.cur ? { x: this.cur.x, y: this.cur.y } : null,
+      floorY: this.cur ? this.cur.floorY : 0,
+      anchor: o.anchor ?? 'floor',
+      top: o.top ?? 0,
+    });
+    if (o.color != null) b.hasColor = true;
+  }
+  finalize() {
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const col = new THREE.Color();
+    for (const b of this.map.values()) {
+      const mesh = new THREE.InstancedMesh(this.mgr.geo(b.geoKey), this.mgr.mat(b.matKey), b.items.length);
+      b.items.forEach((it, i) => {
+        if (it.matrix) {
+          m4.copy(it.matrix);
+        } else {
+          q.setFromEuler(e.set(it.rx, it.ry, it.rz, 'YXZ'));
+          m4.compose(p.set(it.x, it.y, it.z), q, s.set(it.sx, it.sy, it.sz));
+        }
+        mesh.setMatrixAt(i, m4);
+        if (b.hasColor) mesh.setColorAt(i, col.set(it.color ?? 0xffffff));
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.frustumCulled = false;
+      b.mesh = mesh;
+      this.group.add(mesh);
+    }
+  }
+  /**
+   * Re-seats every floor-bound item on the current floor. Maze shifts can flatten cells
+   * (their elevation changes), and without this the decor would be left hovering in mid-air.
+   */
+  refreshHeights(floorOf) {
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    for (const b of this.map.values()) {
+      if (!b.mesh) continue;
+      let dirty = false;
+      b.items.forEach((it, i) => {
+        if (!it.cell || it.matrix || it.anchor === 'top') return;
+        const fy = floorOf(it.cell.x, it.cell.y);
+        if (fy === it.floorY) return;
+        if (it.anchor === 'span') {
+          const hh = Math.max(0.05, it.top - fy);
+          it.sy = hh;
+          it.y = fy + hh / 2;
+        } else {
+          it.y += fy - it.floorY;
+        }
+        it.floorY = fy;
+        if (it.hidden) return;
+        q.setFromEuler(e.set(it.rx, it.ry, it.rz, 'YXZ'));
+        m4.compose(p.set(it.x, it.y, it.z), q, s.set(it.sx, it.sy, it.sz));
+        b.mesh.setMatrixAt(i, m4);
+        dirty = true;
+      });
+      if (dirty) b.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+  hideEdge(key) {
+    for (const b of this.map.values()) {
+      if (!b.mesh) continue;
+      let dirty = false;
+      b.items.forEach((it, i) => {
+        if (it.edges && !it.hidden && it.edges.includes(key)) {
+          it.hidden = true;
+          b.mesh.setMatrixAt(i, ZERO_MATRIX);
+          dirty = true;
+        }
+      });
+      if (dirty) b.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+}
+
+/* ------------------------------ manager ---------------------------- */
+
+class RegionManager {
+  constructor({ scene, CELL, STEP_HEIGHT, edgeKey, onRegionChange }) {
+    this.scene = scene;
+    this.CELL = CELL;
+    this.STEP = STEP_HEIGHT;
+    this.edgeKey = edgeKey;
+    this.onRegionChange = onRegionChange || null;
+    this.regionMap = null;
+    this.currentRegion = null;
+    this._geos = {};
+    this._mats = {};
+    this._texs = {};
+    this._wallSets = {};
+    this._floorMats = {};
+    this._ceilMats = {};
+    this._lights = null;
+    this._decor = null;
+    this._ceil = null;
+    this._levelGeos = [];
+    this._origin = { x: 0, z: 0 };
+    this._w = 0;
+    this._h = 0;
+    this._baseSeed = '';
+    this._level = 1;
+    this._fogTarget = new THREE.Color(REGION_FOG.house);
+  }
+
+  /* ---- shared resources ---- */
+  geo(key) {
+    if (this._geos[key]) return this._geos[key];
+    let g;
+    if (/^stalag\d$/.test(key)) {
+      this._geos[key] = makeStalagGeometry(Number(key.slice(6)) + 1);
+      return this._geos[key];
+    }
+    switch (key) {
+      case 'box': g = new THREE.BoxGeometry(1, 1, 1); break;
+      case 'cyl': g = new THREE.CylinderGeometry(1, 1, 1, 10); break;
+      case 'cyl6': g = new THREE.CylinderGeometry(1, 1, 1, 6); break;
+      case 'cone': g = new THREE.ConeGeometry(1, 1, 6); break;
+      case 'sphere': g = new THREE.SphereGeometry(1, 10, 8); break;
+      case 'cage': g = new THREE.SphereGeometry(1, 7, 5); break;
+      case 'ico': g = new THREE.IcosahedronGeometry(1, 0); break;
+      case 'plane': g = new THREE.PlaneGeometry(1, 1); break;
+      default: throw new Error(`unknown geo ${key}`);
+    }
+    this._geos[key] = g;
+    return g;
+  }
+  tex(key, canvas, opts = {}) {
+    if (this._texs[key]) return this._texs[key];
+    const t = new THREE.CanvasTexture(canvas());
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(opts.rx ?? 1, opts.ry ?? 1);
+    t.colorSpace = THREE.SRGBColorSpace;
+    this._texs[key] = t;
+    return t;
+  }
+  mat(key) {
+    if (this._mats[key]) return this._mats[key];
+    const std = (o) => new THREE.MeshStandardMaterial(o);
+    let m;
+    switch (key) {
+      case 'basic': m = new THREE.MeshBasicMaterial({ color: 0xffffff }); break;
+      case 'wire': m = new THREE.MeshBasicMaterial({ color: 0x0c0c0c, wireframe: true }); break;
+      case 'iron': m = std({ color: 0x1b1613, roughness: 0.55, metalness: 0.7 }); break;
+      case 'panelFrame': m = std({ color: 0x2b2a25, roughness: 0.8 }); break;
+      case 'woodDark': m = std({ color: 0x3b2a1e, roughness: 0.9 }); break;
+      case 'torchWood': m = std({ color: 0x4a3423, roughness: 0.9 }); break;
+      case 'char': m = std({ color: 0x0e0c0a, roughness: 1 }); break;
+      case 'desk': m = std({ color: 0x6d675a, roughness: 0.7 }); break;
+      case 'metalGrey': m = std({ color: 0x5b6062, roughness: 0.55, metalness: 0.5 }); break;
+      case 'fabric': m = std({ color: 0x53626b, roughness: 1 }); break;
+      case 'dark': m = std({ color: 0x101112, roughness: 0.6 }); break;
+      case 'chair': m = std({ color: 0x23272b, roughness: 0.8 }); break;
+      case 'paper': m = std({ color: 0xffffff, roughness: 1, side: THREE.DoubleSide }); break;
+      case 'rock': m = std({ color: 0x3d3935, roughness: 1, flatShading: true }); break;
+      case 'crystal': m = new THREE.MeshBasicMaterial({ color: 0xffffff }); break;
+      case 'tinted': m = std({ color: 0xffffff, roughness: 0.6, metalness: 0.45 }); break; 
+      case 'crate': m = std({ color: 0x6a5030, roughness: 0.9 }); break;
+      case 'bone': m = std({ color: 0xb9b19f, roughness: 0.9 }); break;
+      case 'panelBox': m = std({ color: 0x3b3e3c, roughness: 0.6, metalness: 0.4 }); break;
+      case 'matte': m = std({ color: 0xffffff, roughness: 1 }); break; 
+      case 'tile': m = std({ color: 0xbfd0cd, roughness: 0.35 }); break; 
+      case 'stone': m = std({ color: 0x57544d, roughness: 1, flatShading: true }); break; 
+      case 'slime': m = std({ color: 0x2c4a28, roughness: 0.25, metalness: 0.1 }); break;
+      case 'puddle': m = std({ color: 0x0e1719, roughness: 0.06, metalness: 0.75 }); break;
+      case 'rug':
+        m = std({
+          map: this.tex('rug', () => makeRugCanvas(createRng(hashSeed('rugtex')))),
+          roughness: 1,
+          side: THREE.DoubleSide,
+        });
+        break;
+      case 'web':
+        m = std({
+          map: this.tex('web', () => makeWebCanvas()),
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          roughness: 1,
+          color: 0xd6d6cc,
+        });
+        break;
+      default: throw new Error(`unknown material ${key}`);
+    }
+    this._mats[key] = m;
+    return m;
+  }
+  _texMat(key, canvasFn, matOpts, texOpts = {}) {
+    const map = this.tex(key, canvasFn, texOpts);
+    return new THREE.MeshStandardMaterial({ map, ...matOpts });
+  }
+
+  haloTexture() {
+    return this.tex('halo', () => {
+      const [c, ctx] = mkCanvas(64, 64);
+      const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      g.addColorStop(0, 'rgba(255,255,255,1)');
+      g.addColorStop(0.25, 'rgba(255,255,255,0.35)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 64, 64);
+      return c;
+    });
+  }
+
+  /* ---- wall / floor / ceiling materials ---- */
+  wallMaterial(region, rng) {
+    if (region === 'house' || !(REGION_WEIGHTS[region] || region === 'deepcave')) return null;
+    let set = this._wallSets[region];
+    if (!set) {
+      const R = (s) => createRng(hashSeed(`wall_${region}_${s}`));
+      if (region === 'office') {
+        set = [
+          { w: 3, m: this._texMat('ow1', () => makeOfficeWallCanvas(R(1), false), { roughness: 0.95 }, { rx: 1.5 }) },
+          { w: 1.2, m: this._texMat('ow2', () => makeOfficeWallCanvas(R(2), true), { roughness: 0.97 }, { rx: 1.5 }) },
+        ];
+      } else if (region === 'deepcave') {
+        set = [
+          { w: 2, m: this._rockWall('dw1', R(1), true) },
+          { w: 1, m: this._rockWall('dw2', R(2), true) },
+        ];
+      } else if (region === 'library') {
+        set = [
+          { w: 3, m: this._texMat('lw1', () => makeLibraryWallCanvas(R(1), false), { roughness: 0.92 }, { rx: 1.5 }) },
+          { w: 1.2, m: this._texMat('lw2', () => makeLibraryWallCanvas(R(2), true), { roughness: 0.95 }, { rx: 1.5 }) },
+        ];
+      } else if (region === 'pool') {
+        set = [
+          { w: 3, m: this._texMat('pw1', () => makePoolWallCanvas(R(1), false), { roughness: 0.3 }, { rx: 1.5 }) },
+          { w: 1.4, m: this._texMat('pw2', () => makePoolWallCanvas(R(2), true), { roughness: 0.4 }, { rx: 1.5 }) },
+        ];
+      } else if (region === 'sewer') {
+        set = [
+          { w: 3, m: this._texMat('sw1', () => makeSewerWallCanvas(R(1), false), { roughness: 0.6 }, { rx: 1.5 }) },
+          { w: 1.5, m: this._texMat('sw2', () => makeSewerWallCanvas(R(2), true), { roughness: 0.7 }, { rx: 1.5 }) },
+        ];
+      } else if (region === 'crypt') {
+        set = [
+          { w: 3, m: this._texMat('xw1', () => makeCryptWallCanvas(R(1), false), { roughness: 1 }, { rx: 1.5 }) },
+          { w: 1.5, m: this._texMat('xw2', () => makeCryptWallCanvas(R(2), true), { roughness: 1 }, { rx: 1.5 }) },
+        ];
+      } else if (region === 'cave') {
+        set = [
+          { w: 2, m: this._rockWall('cw1', R(1), false) },
+          { w: 2, m: this._rockWall('cw2', R(2), true) },
+        ];
+      } else {
+        set = [
+          { w: 3, m: this._texMat('mw1', () => makeConcreteCanvas(R(1), false, false), { roughness: 0.95 }, { rx: 1.5 }) },
+          { w: 1.4, m: this._texMat('mw2', () => makeConcreteCanvas(R(2), true, false), { roughness: 0.9 }, { rx: 1.5 }) },
+        ];
+      }
+      this._wallSets[region] = set;
+    }
+    const total = set.reduce((a, s) => a + s.w, 0);
+    let r = rng() * total;
+    for (const s of set) {
+      r -= s.w;
+      if (r <= 0) return s.m;
+    }
+    return set[0].m;
+  }
+  _rockWall(key, rng, dark) {
+    const map = this.tex(key, () => makeCaveRockCanvas(rng, dark), { rx: 1.5 });
+    return new THREE.MeshStandardMaterial({ map, bumpMap: map, bumpScale: 3, roughness: 1 });
+  }
+  floorKey(region, surface, isRoom) {
+    if (surface !== 'stone') return surface;
+    switch (region) {
+      case 'office': return 'carpet';
+      case 'cave': return 'rock';
+      case 'deepcave': return 'rock';
+      case 'maintenance': return 'concrete';
+      case 'library': return 'parquet';
+      case 'pool': return 'tile';
+      case 'sewer': return 'cobble';
+      case 'crypt': return 'flagstone';
+      default: return isRoom ? 'planks' : 'stone';
+    }
+  }
+  floorMaterial(key) {
+    if (this._floorMats[key]) return this._floorMats[key];
+    const R = createRng(hashSeed(`floor_${key}`));
+    let m;
+    switch (key) {
+      case 'carpet': m = this._texMat('f_carpet', () => makeCarpetCanvas(R), { roughness: 1 }); break;
+      case 'rock': m = this._texMat('f_rock', () => makeRockFloorCanvas(R), { roughness: 1 }); break;
+      case 'concrete': m = this._texMat('f_conc', () => makeConcreteFloorCanvas(R), { roughness: 0.95 }); break;
+      case 'planks': m = this._texMat('f_planks', () => makePlankFloorCanvas(R), { roughness: 0.9 }); break;
+      case 'parquet': m = this._texMat('f_parquet', () => makeLibraryFloorCanvas(R), { roughness: 0.8 }); break;
+      case 'tile': m = this._texMat('f_tile', () => makePoolFloorCanvas(R), { roughness: 0.3 }); break;
+      case 'cobble': m = this._texMat('f_cobble', () => makeSewerFloorCanvas(R), { roughness: 0.5 }); break;
+      case 'flagstone': m = this._texMat('f_flag', () => makeCryptFloorCanvas(R), { roughness: 1 }); break;
+      default: return null;
+    }
+    this._floorMats[key] = m;
+    return m;
+  }
+  _ceilingMaterial(region) {
+    if (this._ceilMats[region]) return this._ceilMats[region];
+    const R = createRng(hashSeed(`ceil_${region}`));
+    let m;
+    if (region === 'office') {
+      m = this._texMat('c_office', () => makeCeilingTileCanvas(R), { roughness: 1 }, { rx: 6, ry: 6 });
+    } else if (region === 'deepcave') {
+      const map = this.tex('c_deep', () => makeCaveRockCanvas(R, true), { rx: 2, ry: 2 });
+      m = new THREE.MeshStandardMaterial({ map, bumpMap: map, bumpScale: 3, roughness: 1, color: 0x8a8580 });
+    } else if (region === 'cave') {
+      const map = this.tex('c_cave', () => makeCaveRockCanvas(R, true), { rx: 2, ry: 2 });
+      m = new THREE.MeshStandardMaterial({ map, bumpMap: map, bumpScale: 3, roughness: 1 });
+    } else if (region === 'library') {
+      m = this._texMat('c_lib', () => makeLibraryCeilingCanvas(R), { roughness: 1 }, { rx: 3, ry: 3 });
+    } else if (region === 'pool') {
+      m = this._texMat('c_pool', () => makePoolCeilingCanvas(R), { roughness: 0.6 }, { rx: 5, ry: 5 });
+    } else if (region === 'sewer') {
+      m = this._texMat('c_sewer', () => makeSewerWallCanvas(R, true), { roughness: 0.8 }, { rx: 2, ry: 2 });
+    } else if (region === 'crypt') {
+      m = this._texMat('c_crypt', () => makeCryptWallCanvas(R, true), { roughness: 1 }, { rx: 2, ry: 2 });
+    } else if (region === 'maintenance') {
+      m = this._texMat('c_maint', () => makeConcreteCanvas(R, false, true), { roughness: 1 }, { rx: 2, ry: 2 });
+    } else {
+      m = new THREE.MeshStandardMaterial({ color: 0x121214, roughness: 1 });
+    }
+    this._ceilMats[region] = m;
+    return m;
+  }
+
+  /* ---- region map ---- */
+  generate(w, h, baseSeed, level) {
+    this._w = w;
+    this._h = h;
+    this._baseSeed = baseSeed;
+    this._level = level;
+    this._pockets = null;
+    this._pocketSet = new Set();
+    const rng = createRng(hashSeed(`${baseSeed}_${level}_regions`));
+    
+    const count = Math.max(3, Math.min(7, Math.round((w * h) / 90)));
+    const types = Object.keys(REGION_WEIGHTS);
+    const weightedPick = (pool, weightOf) => {
+      const total = pool.reduce((a, t) => a + weightOf(t), 0);
+      let r = rng() * total;
+      for (const t of pool) {
+        r -= weightOf(t);
+        if (r <= 0) return t;
+      }
+      return pool[0];
+    };
+    const seeds = [];
+    for (let i = 0; i < count; i++) {
+      const sx = level === 1 && i === 0 ? 1.2 : rng() * w;
+      const sy = level === 1 && i === 0 ? 1.2 : rng() * h;
+      let type;
+      if (i === 0) {
+        type = level === 1 ? 'house' : weightedPick(types, (t) => REGION_WEIGHTS[t]);
+      } else {
+        
+        let near = seeds[0];
+        let nd = Infinity;
+        for (const s of seeds) {
+          const d = Math.hypot(s.x - sx, s.y - sy);
+          if (d < nd) {
+            nd = d;
+            near = s;
+          }
+        }
+        const used = new Set(seeds.map((s) => s.type));
+        const pool = [near.type, ...REGION_COMPAT[near.type]];
+        type = weightedPick(pool, (t) => (t === near.type ? 0.8 : used.has(t) ? 1 : 2.2));
+      }
+      seeds.push({ x: sx, y: sy, type });
+    }
+    
+    for (let i = 1; i < seeds.length; i++) {
+      const nearest = seeds
+        .map((s, j) => ({ j, d: Math.hypot(s.x - seeds[i].x, s.y - seeds[i].y) }))
+        .filter((o) => o.j !== i)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 2);
+      for (const o of nearest) {
+        const a = seeds[i].type;
+        const b = seeds[o.j].type;
+        if (a !== b && !REGION_COMPAT[a].includes(b)) {
+          seeds[i].type = 'maintenance';
+          break;
+        }
+      }
+    }
+    const jitter = [];
+    for (let y = 0; y < h; y++) {
+      const row = [];
+      for (let x = 0; x < w; x++) row.push(rng());
+      jitter.push(row);
+    }
+    let map = [];
+    for (let y = 0; y < h; y++) {
+      const row = [];
+      for (let x = 0; x < w; x++) {
+        let best = null;
+        let bestD = Infinity;
+        for (const s of seeds) {
+          const d = (Math.hypot(x + 0.5 - s.x, y + 0.5 - s.y) + jitter[y][x] * 0.7) * (s.type === 'house' ? 0.85 : 1);
+          if (d < bestD) {
+            bestD = d;
+            best = s;
+          }
+        }
+        row.push(best.type);
+      }
+      map.push(row);
+    }
+    
+    for (let pass = 0; pass < 2; pass++) {
+      const next = map.map((r) => r.slice());
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const own = map[y][x];
+          const counts = {};
+          for (const d of DIR_KEYS) {
+            const nx = x + DIRS[d].dx;
+            const ny = y + DIRS[d].dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            const t = map[ny][nx];
+            counts[t] = (counts[t] || 0) + 1;
+          }
+          for (const t of Object.keys(counts)) {
+            if (t !== own && counts[t] >= 3 && !(level === 1 && x === 0 && y === 0)) next[y][x] = t;
+          }
+        }
+      }
+      map = next;
+    }
+    
+    
+    const buffer = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const own = map[y][x];
+        if (!REGION_BUFFERED.has(own)) continue;
+        for (const d of DIR_KEYS) {
+          const nx = x + DIRS[d].dx;
+          const ny = y + DIRS[d].dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const t = map[ny][nx];
+          if (t !== own && t !== 'maintenance' && !REGION_COMPAT[own].includes(t)) {
+            buffer.push([x, y]);
+            break;
+          }
+        }
+      }
+    }
+    for (const [x, y] of buffer) map[y][x] = 'maintenance';
+    
+    
+    const other = [];
+    const prob = [];
+    const roll = [];
+    for (let y = 0; y < h; y++) {
+      const oRow = [];
+      const pRow = [];
+      const rRow = [];
+      for (let x = 0; x < w; x++) {
+        const own = map[y][x];
+        let dOwn = Infinity;
+        let dOth = Infinity;
+        let oth = null;
+        for (const s of seeds) {
+          const d = Math.hypot(x + 0.5 - s.x, y + 0.5 - s.y);
+          if (s.type === own) dOwn = Math.min(dOwn, d);
+          else if (d < dOth) {
+            dOth = d;
+            oth = s.type;
+          }
+        }
+        const gap = Math.max(0, dOth - dOwn);
+        oRow.push(oth);
+        pRow.push(oth ? 0.5 * Math.max(0, 1 - gap / BLEND_WIDTH) : 0);
+        rRow.push([rng(), rng(), rng(), rng(), rng()]);
+      }
+      other.push(oRow);
+      prob.push(pRow);
+      roll.push(rRow);
+    }
+    this._blend = { other, p: prob, roll };
+    this.regionMap = map;
+    return map;
+  }
+  /** region whose look applies to `channel` in this cell (blends near borders) */
+  visual(x, y, channel) {
+    const own = this.regionMap[y][x];
+    const b = this._blend;
+    if (!b || own === 'deepcave') return own;
+    return b.roll[y][x][BLEND_CH[channel]] < b.p[y][x] ? b.other[y][x] : own;
+  }
+  wallRegionAt(x, y, rng) {
+    const own = this.regionMap[y][x];
+    const b = this._blend;
+    if (!b || own === 'deepcave') return own;
+    const p = b.p[y][x];
+    return p > 0 && rng() < p ? b.other[y][x] : own;
+  }
+  /** register the sealed claustrophobic caves ({cells:[[x,y]], entrances:[...]}) */
+  setPockets(pockets) {
+    this._pockets = pockets && pockets.cells.length ? pockets : null;
+    this._pocketSet = new Set();
+    if (!this._pockets) return;
+    for (const [x, y] of this._pockets.cells) {
+      this._pocketSet.add(`${x},${y}`);
+      this.regionMap[y][x] = 'deepcave';
+    }
+  }
+  isPocket(x, y) {
+    return this._pocketSet.has(`${x},${y}`);
+  }
+  hasPockets() {
+    return !!this._pockets;
+  }
+  protectedCells() {
+    if (!this._pockets) return [];
+    const out = this._pockets.cells.map(([x, y]) => [x, y]);
+    for (const e of this._pockets.entrances) out.push([e.ox, e.oy]);
+    return out;
+  }
+  adjustSurfaces(surfaceMap) {
+    if (!surfaceMap || !this.regionMap) return;
+    for (let y = 0; y < this._h; y++) {
+      for (let x = 0; x < this._w; x++) {
+        const r = this.regionMap[y][x];
+        const sf = surfaceMap[y][x];
+        if (r === 'office') surfaceMap[y][x] = 'stone';
+        else if (r === 'deepcave' && sf !== 'water') surfaceMap[y][x] = 'mud';
+        else if (r === 'cave' && sf === 'grass') surfaceMap[y][x] = 'mud';
+        else if (r === 'maintenance' && (sf === 'grass' || sf === 'mud')) surfaceMap[y][x] = 'stone';
+        else if (r === 'library') surfaceMap[y][x] = 'stone';
+        else if (r === 'crypt' && (sf === 'grass' || sf === 'mud')) surfaceMap[y][x] = 'stone';
+        else if (r === 'pool') {
+          
+          const wet = Math.sin(x * 0.8 + this._level * 1.7) + Math.cos(y * 0.7 - this._level) + Math.sin((x + y) * 0.45) > 1.0;
+          surfaceMap[y][x] = wet ? 'water' : 'stone';
+        } else if (r === 'sewer') {
+          
+          const chan = Math.sin(x * 0.55 + this._level) * Math.cos(y * 0.9 + this._level * 2.1) > 0.5;
+          surfaceMap[y][x] = chan ? 'water' : sf === 'grass' ? 'mud' : sf === 'water' ? 'water' : 'stone';
+        }
+      }
+    }
+  }
+  regionAt(px, pz) {
+    if (!this.regionMap) return null;
+    const cx = Math.max(0, Math.min(this._w - 1, Math.floor((px - this._origin.x) / this.CELL)));
+    const cy = Math.max(0, Math.min(this._h - 1, Math.floor((pz - this._origin.z) / this.CELL)));
+    return this.regionMap[cy][cx];
+  }
+
+  /* ---- ceiling ---- */
+  buildCeiling(grid, w, h, originX, originZ, wallTop) {
+    this._origin = { x: originX, z: originZ };
+    const group = new THREE.Group();
+    const cells = {};
+    const low = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (this.regionMap[y][x] === 'deepcave') low.push([x, y]);
+        else (cells[this.visual(x, y, 'ceil')] ||= []).push([x, y]);
+      }
+    }
+    const geo = new THREE.PlaneGeometry(this.CELL, this.CELL);
+    this._levelGeos.push(geo);
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));
+    const one = new THREE.Vector3(1, 1, 1);
+    const p = new THREE.Vector3();
+    const make = (region, list, heightOf) => {
+      if (!list.length) return;
+      const mesh = new THREE.InstancedMesh(geo, this._ceilingMaterial(region), list.length);
+      list.forEach(([x, y], i) => {
+        m4.compose(p.set(originX + x * this.CELL + this.CELL / 2, heightOf(x, y), originZ + y * this.CELL + this.CELL / 2), q, one);
+        mesh.setMatrixAt(i, m4);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.frustumCulled = false;
+      group.add(mesh);
+    };
+    for (const [region, list] of Object.entries(cells)) make(region, list, () => wallTop);
+    
+    make('deepcave', low, (x, y) => (grid[y][x].elevation || 0) * this.STEP + CAVE_CEIL);
+    this._ceil = group;
+    return group;
+  }
+
+  /* ---- lights ---- */
+  buildLights(grid, w, h, originX, originZ, wallTop, avoid) {
+    this._disposeLights();
+    const rng = createRng(hashSeed(`${this._baseSeed}_${this._level}_lamps`));
+    const CELL = this.CELL;
+    const lamps = [];
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const cell = grid[y][x];
+        const region = this.visual(x, y, 'light');
+        const cfg = LIGHT_CFG[region];
+        if (!cfg) continue;
+        const cx = originX + x * CELL + CELL / 2;
+        const cz = originZ + y * CELL + CELL / 2;
+        const floorY = (cell.elevation || 0) * this.STEP;
+
+        if (cfg.kind === 'torch') {
+          if (cell.rampDir || (avoid && avoid.has(`${x},${y}`)) || rng() > cfg.wall) continue;
+          const dirs = DIR_KEYS.filter((d) => this._wallUsable(cell, d));
+          if (!dirs.length) continue;
+          const d = dirs[Math.floor(rng() * dirs.length)];
+          const D = DIRS[d];
+          const edgeX = cx + D.ex * (CELL / 2);
+          const edgeZ = cz + D.ez * (CELL / 2);
+          const hx = edgeX + D.ix * 0.3 + (D.ix === 0 ? (rng() - 0.5) * 1.2 : 0);
+          const hz = edgeZ + D.iz * 0.3 + (D.iz === 0 ? (rng() - 0.5) * 1.2 : 0);
+          const y0 = floorY + 1.75;
+          lamps.push({
+            kind: 'torch', x: hx, y: y0 + 0.48, z: hz, y0, dir: d,
+            edgeX: hx - D.ix * 0.3, edgeZ: hz - D.iz * 0.3,
+            lightX: hx + D.ix * 0.25, lightZ: hz + D.iz * 0.25, lightY: y0 + 0.5,
+            edges: this._edgeKeys(x, y, d),
+            dead: false, flicker: true, phase: rng() * 100, tint: rng(), level: 1, power: 1.4,
+          });
+          continue;
+        }
+
+        const isRoom = cell.roomId != null;
+        const onLattice = x % 2 === 0 && y % 2 === 0;
+        const chance = isRoom ? cfg.room : onLattice ? cfg.lattice : cfg.stray;
+        if (rng() > chance) continue;
+        const dead = rng() < cfg.dead;
+        const flicker = !dead && rng() < cfg.flicker;
+        const jitter = cfg.kind === 'lantern' && !isRoom ? 0.25 : 0;
+        const px = cx + (rng() - 0.5) * 2 * jitter;
+        const pz = cz + (rng() - 0.5) * 2 * jitter;
+        const phase = rng() * 100;
+        const tint = rng();
+        const alongX = rng() < 0.5;
+        const drop = wallTop - floorY;
+        const far = Math.min(3, Math.pow(drop / 3.4, 2));
+        const lamp = { kind: cfg.kind, region, x: px, z: pz, dead, flicker, phase, tint, level: 1, alongX, cellX: x, cellY: y };
+        if (cfg.kind === 'lantern') {
+          lamp.y = Math.min(wallTop - (LANTERN_MIN_CHAIN + LANTERN_BODY_H / 2 + 0.06), floorY + LANTERN_MAX_DROP);
+          lamp.lightY = lamp.y - 0.05;
+          lamp.power = 1;
+        } else if (cfg.kind === 'panel') {
+          lamp.y = wallTop - 0.05;
+          lamp.lightY = wallTop - 0.4;
+          lamp.power = 1.25 * far;
+        } else {
+          lamp.y = wallTop - 0.2;
+          lamp.lightY = wallTop - 0.3;
+          lamp.red = tint < 0.3;
+          lamp.power = 1.2 * far;
+        }
+        lamps.push(lamp);
+      }
+    }
+    if (!lamps.length) return;
+
+    const group = new THREE.Group();
+    const batch = new Batch(this, group);
+    const col = (hex) => new THREE.Color(hex);
+    const warm = col(0xff8a3d);
+
+    const byKind = { lantern: [], panel: [], bulb: [], torch: [] };
+    lamps.forEach((l) => byKind[l.kind].push(l));
+
+    
+    byKind.lantern.forEach((l) => {
+      l.baseColor = l.dead ? col(0x140c07) : col(0xffb45a).lerp(warm, l.tint * 0.6);
+      l.lightColor = col(0xffb45a);
+    });
+    byKind.panel.forEach((l) => {
+      const cool = l.region === 'pool'; 
+      l.baseColor = l.dead ? col(0x1c1b16) : col(cool ? 0xb8f0ff : 0xfff0a8).multiplyScalar(1.5);
+      l.lightColor = col(cool ? 0xa8e8ff : 0xfff0b0);
+    });
+    byKind.bulb.forEach((l) => {
+      const hex = l.region === 'sewer' ? 0xb0ff80 : l.red ? 0xff3a28 : 0xe4ffd0; 
+      l.baseColor = l.dead ? col(0x121410) : col(hex).multiplyScalar(1.3);
+      l.lightColor = col(hex);
+    });
+    byKind.torch.forEach((l) => {
+      l.baseColor = col(0xff6a1a);
+      l.baseColor2 = col(0xffd27a);
+      l.lightColor = col(0xff7a30);
+    });
+
+    const makeCore = (list, geoKey, matKey) => {
+      if (!list.length) return null;
+      const mesh = new THREE.InstancedMesh(this.geo(geoKey), this.mat(matKey), list.length);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      return mesh;
+    };
+    const m4 = new THREE.Matrix4();
+    const q0 = new THREE.Quaternion();
+    const v = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const eul = new THREE.Euler();
+
+    
+    const lanternCores = makeCore(byKind.lantern, 'sphere', 'basic');
+    byKind.lantern.forEach((l, i) => {
+      l.index = i;
+      l.mesh = lanternCores;
+      const topY = l.y + LANTERN_BODY_H / 2 + 0.06;
+      const chainLen = wallTop - topY;
+      batch.add('cyl', 'iron', l.x, wallTop - chainLen / 2, l.z, { sx: 0.012, sy: chainLen, sz: 0.012 });
+      batch.add('cyl', 'iron', l.x, wallTop - 0.015, l.z, { sx: 0.09, sy: 0.03, sz: 0.09 });
+      batch.add('cone', 'iron', l.x, l.y + LANTERN_BODY_H / 2 + 0.06, l.z, { sx: 0.17, sy: 0.12, sz: 0.17 });
+      batch.add('cyl6', 'iron', l.x, l.y - LANTERN_BODY_H / 2, l.z, { sx: 0.1, sy: 0.04, sz: 0.1 });
+      [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([sx, sz]) => {
+        batch.add('box', 'iron', l.x + sx * 0.095, l.y, l.z + sz * 0.095, { sx: 0.02, sy: LANTERN_BODY_H, sz: 0.02 });
+      });
+      m4.compose(v.set(l.x, l.y, l.z), q0, s.set(0.085, 0.085, 0.085));
+      lanternCores.setMatrixAt(i, m4);
+      lanternCores.setColorAt(i, l.baseColor);
+    });
+
+    
+    const panelFaces = makeCore(byKind.panel, 'plane', 'basic');
+    byKind.panel.forEach((l, i) => {
+      l.index = i;
+      l.mesh = panelFaces;
+      const ry = l.alongX ? 0 : Math.PI / 2;
+      batch.add('box', 'panelFrame', l.x, wallTop - 0.015, l.z, { ry, sx: PANEL_W + 0.1, sy: 0.03, sz: PANEL_D + 0.1 });
+      m4.compose(v.set(l.x, wallTop - 0.032, l.z), q0.setFromEuler(eul.set(Math.PI / 2, ry, 0, 'YXZ')), s.set(PANEL_W, PANEL_D, 1));
+      panelFaces.setMatrixAt(i, m4);
+      panelFaces.setColorAt(i, l.baseColor);
+    });
+
+    
+    const bulbCores = makeCore(byKind.bulb, 'sphere', 'basic');
+    byKind.bulb.forEach((l, i) => {
+      l.index = i;
+      l.mesh = bulbCores;
+      batch.add('cyl', 'iron', l.x, wallTop - 0.05, l.z, { sx: 0.06, sy: 0.1, sz: 0.06 });
+      batch.add('cage', 'wire', l.x, l.y, l.z, { sx: 0.15, sy: 0.15, sz: 0.15 });
+      m4.compose(v.set(l.x, l.y, l.z), q0.identity(), s.set(0.085, 0.085, 0.085));
+      bulbCores.setMatrixAt(i, m4);
+      bulbCores.setColorAt(i, l.baseColor);
+    });
+
+    
+    const flameOuter = makeCore(byKind.torch, 'cone', 'basic');
+    const flameInner = makeCore(byKind.torch, 'cone', 'basic');
+    byKind.torch.forEach((l, i) => {
+      l.index = i;
+      l.mesh = flameOuter;
+      l.mesh2 = flameInner;
+      const D = DIRS[l.dir];
+      const tag = { edges: l.edges };
+      batch.add('cyl', 'torchWood', l.x, l.y0, l.z, { sx: 0.035, sy: 0.5, sz: 0.035, ...tag });
+      batch.add('cyl', 'char', l.x, l.y0 + 0.29, l.z, { sx: 0.065, sy: 0.12, sz: 0.065, ...tag });
+      
+      batch.add(
+        'box', 'iron',
+        l.edgeX + D.ix * 0.2, l.y0 - 0.05, l.edgeZ + D.iz * 0.2,
+        { sx: D.ix === 0 ? 0.05 : 0.2, sy: 0.05, sz: D.iz === 0 ? 0.05 : 0.2, ...tag },
+      );
+      batch.add('cyl6', 'iron', l.x, l.y0 - 0.15, l.z, { sx: 0.05, sy: 0.03, sz: 0.05, ...tag });
+      this._setFlame(l, 1, 1);
+      flameOuter.setColorAt(i, l.baseColor);
+      flameInner.setColorAt(i, l.baseColor2);
+    });
+
+    batch.finalize();
+
+    
+    const halos = [];
+    const haloTex = this.haloTexture();
+    const makeHalo = (list, size, mult) => {
+      const lit = list.filter((l) => !l.dead);
+      if (!lit.length) return;
+      const pos = new Float32Array(lit.length * 3);
+      const colArr = new Float32Array(lit.length * 3);
+      const geo = new THREE.BufferGeometry();
+      lit.forEach((l, i) => {
+        pos.set([l.x, l.kind === 'panel' ? wallTop - 0.3 : l.y, l.z], i * 3);
+        colArr.set([l.baseColor.r * mult, l.baseColor.g * mult, l.baseColor.b * mult], i * 3);
+        l.halo = { arr: colArr, i: i * 3, mult, geo };
+      });
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+      const mat = new THREE.PointsMaterial({
+        size, map: haloTex, vertexColors: true, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      group.add(pts);
+      halos.push({ geo, mat });
+    };
+    makeHalo(byKind.lantern, 1.0, 0.55);
+    makeHalo(byKind.panel, 2.6, 0.18);
+    makeHalo(byKind.bulb, 1.5, 0.4);
+    makeHalo(byKind.torch, 1.7, 0.6);
+
+    
+    const pool = [];
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const light = new THREE.PointLight(0xffb45a, 0, LIGHT_DISTANCE, 2);
+      light.castShadow = false;
+      group.add(light);
+      pool.push({ light, lamp: null, fade: 0 });
+    }
+
+    for (const m of [lanternCores, panelFaces, bulbCores, flameOuter, flameInner]) {
+      if (!m) continue;
+      m.instanceMatrix.needsUpdate = true;
+      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    }
+
+    this.scene.add(group);
+    const lit = lamps.filter((l) => !l.dead);
+    this._lights = {
+      group, batch, lamps, lit, halos, pool, byKind,
+      cores: [lanternCores, panelFaces, bulbCores, flameOuter, flameInner].filter(Boolean),
+      flickerers: lit.filter((l) => l.flicker && l.kind !== 'torch'),
+      torches: byKind.torch,
+      time: 0, reassignIn: 0,
+    };
+  }
+  _wallUsable(cell, d) {
+    const D = cap(d);
+    return !!cell[d] && !cell[`door${D}`] && !cell[`crawl${D}`];
+  }
+  _edgeKeys(x, y, d) {
+    const D = DIRS[d];
+    const keys = [this.edgeKey(x, y, d)];
+    const nx = x + D.dx;
+    const ny = y + D.dy;
+    if (nx >= 0 && ny >= 0 && nx < this._w && ny < this._h) keys.push(this.edgeKey(nx, ny, D.opp));
+    return keys;
+  }
+  _setFlame(l, sy, sx) {
+    const outer = l.mesh;
+    const inner = l.mesh2;
+    const m4 = this._m4 || (this._m4 = new THREE.Matrix4());
+    const q = this._q0 || (this._q0 = new THREE.Quaternion());
+    const p = this._p || (this._p = new THREE.Vector3());
+    const s = this._s || (this._s = new THREE.Vector3());
+    m4.compose(p.set(l.x, l.y0 + 0.35 + 0.13 * sy, l.z), q, s.set(0.075 * sx, 0.26 * sy, 0.075 * sx));
+    outer.setMatrixAt(l.index, m4);
+    m4.compose(p.set(l.x, l.y0 + 0.35 + 0.08 * sy, l.z), q, s.set(0.04 * sx, 0.16 * sy, 0.04 * sx));
+    inner.setMatrixAt(l.index, m4);
+  }
+  _disposeLights() {
+    const L = this._lights;
+    if (!L) return;
+    this.scene.remove(L.group);
+    L.group.traverse((o) => {
+      if (o.isInstancedMesh) o.dispose();
+    });
+    L.halos.forEach(({ geo, mat }) => {
+      geo.dispose();
+      mat.dispose();
+    });
+    this._lights = null;
+  }
+
+  onWallFall(key) {
+    if (this._lights) {
+      this._lights.batch.hideEdge(key);
+      for (const l of this._lights.torches) {
+        if (l.removed || !l.edges.includes(key)) continue;
+        l.removed = true;
+        l.mesh.setMatrixAt(l.index, ZERO_MATRIX);
+        l.mesh2.setMatrixAt(l.index, ZERO_MATRIX);
+        l.mesh.instanceMatrix.needsUpdate = true;
+        l.mesh2.instanceMatrix.needsUpdate = true;
+        if (l.halo) {
+          l.halo.arr[l.halo.i] = l.halo.arr[l.halo.i + 1] = l.halo.arr[l.halo.i + 2] = 0;
+          l.halo.geo.attributes.color.needsUpdate = true;
+        }
+      }
+    }
+    if (this._decor) this._decor.batch.hideEdge(key);
+  }
+
+  /* ---- decor ---- */
+  buildDecor({ grid, w, h, originX, originZ, wallTop, avoid, addCollider }) {
+    this._disposeDecor();
+    const rng = createRng(hashSeed(`${this._baseSeed}_${this._level}_decor`));
+    const CELL = this.CELL;
+    const group = new THREE.Group();
+    const batch = new Batch(this, group);
+    const crystals = [];
+    const rnd = (a, b) => a + rng() * (b - a);
+    const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+    const rot = (lx, lz, yaw) => [lx * Math.cos(yaw) + lz * Math.sin(yaw), -lx * Math.sin(yaw) + lz * Math.cos(yaw)];
+    
+    const part = (geo, mat, base, lx, ly, lz, o = {}) => {
+      const [wx, wz] = rot(lx, lz, base.yaw);
+      batch.add(geo, mat, base.x + wx, base.y + ly, base.z + wz, { ...o, ry: base.yaw + (o.ry || 0) });
+    };
+    
+    const cornerWebs = (x, y, cx, cz, usable, anyDoor, chance) => {
+      if (anyDoor) return;
+      for (const [a, b] of [['n', 'w'], ['n', 'e'], ['s', 'w'], ['s', 'e']]) {
+        if (!usable.includes(a) || !usable.includes(b) || rng() > chance) continue;
+        for (const [A, B] of [[a, b], [b, a]]) {
+          const DA = DIRS[A];
+          const DB = DIRS[B];
+          const Px = cx + DA.ex * (CELL / 2) + DB.ex * (CELL / 2);
+          const Pz = cz + DA.ez * (CELL / 2) + DB.ez * (CELL / 2);
+          const size = rnd(0.7, 1.15);
+          const Cx = Px + DA.ix * 0.14 + DB.ix * 0.14;
+          const Cz = Pz + DA.iz * 0.14 + DB.iz * 0.14;
+          const xa = new THREE.Vector3(DB.ix, 0, DB.iz);
+          const ya = new THREE.Vector3(0, 1, 0);
+          const za = new THREE.Vector3().crossVectors(xa, ya);
+          const m = new THREE.Matrix4().makeBasis(xa, ya, za);
+          m.scale(new THREE.Vector3(size, size, 1));
+          m.setPosition(Cx + DB.ix * (size / 2), wallTop - size / 2, Cz + DB.iz * (size / 2));
+          batch.add('plane', 'web', 0, 0, 0, { matrix: m, edges: this._edgeKeys(x, y, A) });
+        }
+      }
+    };
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const cell = grid[y][x];
+        const region = this.visual(x, y, 'decor');
+        const cx = originX + x * CELL + CELL / 2;
+        const cz = originZ + y * CELL + CELL / 2;
+        const floorY = (cell.elevation || 0) * this.STEP;
+        const isRoom = cell.roomId != null;
+        const anyDoor = cell.doorN || cell.doorS || cell.doorE || cell.doorW;
+        const anyCrawl = cell.crawlN || cell.crawlS || cell.crawlE || cell.crawlW;
+        const free = !cell.rampDir && !cell.hurdleDir && !anyDoor && !anyCrawl && !(avoid && avoid.has(`${x},${y}`));
+        const usable = DIR_KEYS.filter((d) => this._wallUsable(cell, d));
+        const collide = (px, pz, r) => addCollider && addCollider(x, y, px, pz, r);
+        batch.cur = { x, y, floorY };
+
+        
+        const ringPoint = (rMin, rMax) => {
+          const a = rng() * Math.PI * 2;
+          const r = rnd(rMin, rMax);
+          return [cx + Math.cos(a) * r, cz + Math.sin(a) * r];
+        };
+        
+        const wallSpot = (d, inset, along = 0) => {
+          const D = DIRS[d];
+          const off = CELL / 2 - 0.125 - inset;
+          const px = cx + D.ex * off + (D.ix === 0 ? along : 0);
+          const pz = cz + D.ez * off + (D.iz === 0 ? along : 0);
+          return [px, pz];
+        };
+        
+        const wallBox = (d, along, inset, py, alongLen, deep, sy, mat, color) => {
+          const [qx, qz] = wallSpot(d, inset, along);
+          const ns = DIRS[d].ix === 0;
+          batch.add('box', mat, qx, py, qz, {
+            sx: ns ? alongLen : deep, sy, sz: ns ? deep : alongLen, ...(color != null ? { color } : {}),
+          });
+        };
+
+        /* ------------ CLAUSTROPHOBIC CAVE ------------ */
+        if (region === 'deepcave') {
+          const ceilY = floorY + CAVE_CEIL;
+          const nTites = 3 + Math.floor(rng() * 5);
+          for (let i = 0; i < nTites; i++) {
+            const r = rnd(0.05, 0.16);
+            const hgt = rnd(0.15, 0.38);
+            batch.add('stalag', 'rock', cx + rnd(-1.8, 1.8), ceilY - hgt / 2 + 0.02, cz + rnd(-1.8, 1.8), {
+              sx: r, sy: hgt, sz: r, rx: Math.PI, ry: rng() * 3,
+            });
+          }
+          if (free && rng() < 0.4) {
+            const [px, pz] = ringPoint(0.9, 1.7);
+            const r = rnd(0.1, 0.26);
+            const hgt = rnd(0.2, 0.6);
+            batch.add('stalag', 'rock', px, floorY + hgt / 2 - 0.02, pz, { sx: r, sy: hgt, sz: r, ry: rng() * 3 });
+            if (r > 0.16) collide(px, pz, r * 0.9);
+          }
+          if (free && rng() < 0.35) {
+            const [px, pz] = ringPoint(0.5, 1.6);
+            const sx = rnd(0.3, 0.55);
+            const sy = rnd(0.2, 0.4);
+            batch.add('ico', 'rock', px, floorY + sy * 0.55, pz, { sx, sy, sz: rnd(0.3, 0.55), rx: rng(), ry: rng() * 3, rz: rng() });
+            collide(px, pz, sx * 0.9);
+          }
+          if (rng() < 0.12) {
+            const bx = cx + rnd(-1.5, 1.5);
+            const bz = cz + rnd(-1.5, 1.5);
+            for (let k = 0; k < 3; k++) {
+              batch.add('cyl', 'bone', bx + rnd(-0.25, 0.25), floorY + 0.03, bz + rnd(-0.25, 0.25), {
+                sx: 0.025, sy: rnd(0.25, 0.4), sz: 0.025, rz: Math.PI / 2, ry: rng() * 3,
+              });
+            }
+          }
+          if (rng() < 0.14) {
+            const [px, pz] = ringPoint(0.6, 1.6);
+            const tint = pick([0x5ff0d0, 0x60c0ff, 0x8a7bff]);
+            for (let i = 0; i < 3; i++) {
+              const hgt = rnd(0.2, 0.45);
+              batch.add('cone', 'crystal', px + rnd(-0.15, 0.15), floorY + hgt / 2 - 0.02, pz + rnd(-0.15, 0.15), {
+                sx: rnd(0.04, 0.08), sy: hgt, sz: rnd(0.04, 0.08), rx: rnd(-0.3, 0.3), rz: rnd(-0.3, 0.3),
+                color: new THREE.Color(tint).multiplyScalar(rnd(0.5, 0.8)),
+              });
+            }
+            crystals.push({ x: px, y: floorY + 0.25, z: pz, c: new THREE.Color(tint).multiplyScalar(0.7), cx: x, cy: y, floorY });
+          }
+        }
+
+        /* ---------------- HOUSE ---------------- */
+        if (region === 'house') {
+          if (isRoom && free && rng() < 0.55) {
+            const [dx, dz] = [rnd(-0.3, 0.3), rnd(-0.3, 0.3)];
+            batch.add('plane', 'rug', cx + dx, floorY + 0.012, cz + dz, {
+              rx: -Math.PI / 2, ry: rng() * Math.PI, sx: rnd(1.8, 2.6), sy: rnd(1.2, 1.7), sz: 1,
+              color: pick([0x7a2f2a, 0x2f4a3a, 0x3a3a5a, 0x6a5228, 0x5a2a4a]),
+            });
+          }
+          if (!isRoom && free && rng() < 0.1) {
+            const n = 2 + Math.floor(rng() * 2);
+            for (let i = 0; i < n; i++) {
+              batch.add('box', 'woodDark', cx + rnd(-1.1, 1.1), floorY + 0.03, cz + rnd(-1.1, 1.1), {
+                ry: rng() * Math.PI, rz: rnd(-0.1, 0.1), sx: rnd(0.5, 1.1), sy: 0.04, sz: 0.12,
+              });
+            }
+          }
+          
+          if (!anyDoor) {
+            for (const [a, b] of [['n', 'w'], ['n', 'e'], ['s', 'w'], ['s', 'e']]) {
+              if (!usable.includes(a) || !usable.includes(b) || rng() > 0.13) continue;
+              for (const [A, B] of [[a, b], [b, a]]) {
+                const DA = DIRS[A];
+                const DB = DIRS[B];
+                const Px = cx + DA.ex * (CELL / 2) + DB.ex * (CELL / 2);
+                const Pz = cz + DA.ez * (CELL / 2) + DB.ez * (CELL / 2);
+                const size = rnd(0.7, 1.15);
+                const Cx = Px + DA.ix * 0.14 + DB.ix * 0.14;
+                const Cz = Pz + DA.iz * 0.14 + DB.iz * 0.14;
+                const xa = new THREE.Vector3(DB.ix, 0, DB.iz);
+                const ya = new THREE.Vector3(0, 1, 0);
+                const za = new THREE.Vector3().crossVectors(xa, ya);
+                const m = new THREE.Matrix4().makeBasis(xa, ya, za);
+                m.scale(new THREE.Vector3(size, size, 1));
+                m.setPosition(Cx + DB.ix * (size / 2), wallTop - size / 2, Cz + DB.iz * (size / 2));
+                batch.add('plane', 'web', 0, 0, 0, { matrix: m, edges: this._edgeKeys(x, y, A) });
+              }
+            }
+          }
+        }
+
+        /* ---------------- OFFICE ---------------- */
+        if (region === 'office') {
+          if (free && rng() < (isRoom ? 0.5 : 0.11)) {
+            const yaw = pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]) + rnd(-0.12, 0.12);
+            const base = { x: cx + rnd(-0.3, 0.3), y: floorY, z: cz + rnd(-0.3, 0.3), yaw };
+            part('box', 'desk', base, 0, 0.74, 0, { sx: 1.4, sy: 0.05, sz: 0.7 });
+            part('box', 'metalGrey', base, -0.5, 0.36, 0, { sx: 0.4, sy: 0.72, sz: 0.62 });
+            part('box', 'metalGrey', base, 0.66, 0.36, 0, { sx: 0.04, sy: 0.72, sz: 0.62 });
+            part('box', 'dark', base, 0.1, 0.87, -0.15, { sx: 0.06, sy: 0.2, sz: 0.06 });
+            part('box', 'dark', base, 0.1, 1.05, -0.15, { sx: 0.52, sy: 0.34, sz: 0.05 });
+            const on = rng() < 0.65;
+            part('box', 'basic', base, 0.1, 1.05, -0.122, {
+              sx: 0.46, sy: 0.28, sz: 0.01,
+              color: on ? pick([0x7fd0b0, 0x8fb0ff, 0xb8e8a0]) : 0x040504,
+            });
+            part('box', 'dark', base, 0.1, 0.77, 0.15, { sx: 0.4, sy: 0.02, sz: 0.14 });
+            if (rng() < 0.4) part('box', 'paper', base, -0.35, 0.78, 0.1, { sx: 0.22, sy: 0.05, sz: 0.3, ry: rnd(-0.4, 0.4), color: 0xd8d3c0 });
+            
+            const cb = { x: base.x, y: floorY, z: base.z, yaw: yaw + rnd(-0.6, 0.6) };
+            const chairOff = rot(0.1, 0.8, yaw);
+            cb.x += chairOff[0];
+            cb.z += chairOff[1];
+            part('box', 'chair', cb, 0, 0.48, 0, { sx: 0.45, sy: 0.06, sz: 0.45 });
+            part('box', 'chair', cb, 0, 0.78, 0.22, { sx: 0.45, sy: 0.5, sz: 0.05 });
+            part('cyl', 'dark', cb, 0, 0.25, 0, { sx: 0.035, sy: 0.4, sz: 0.035 });
+            part('cyl', 'dark', cb, 0, 0.03, 0, { sx: 0.24, sy: 0.04, sz: 0.24 });
+            collide(base.x, base.z, 0.72);
+          } else if (free && usable.length && rng() < 0.11) {
+            const d = pick(usable);
+            const ns = DIRS[d].ix === 0;
+            const [px, pz] = wallSpot(d, 0.3, rnd(-0.9, 0.9));
+            batch.add('box', 'metalGrey', px, floorY + 0.675, pz, {
+              sx: ns ? 0.5 : 0.6, sy: 1.35, sz: ns ? 0.6 : 0.5, edges: null,
+            });
+            for (const hy of [0.35, 0.75, 1.15]) {
+              batch.add('box', 'dark', px + DIRS[d].ix * 0.305, floorY + hy, pz + DIRS[d].iz * 0.305, {
+                sx: ns ? 0.16 : 0.02, sy: 0.03, sz: ns ? 0.02 : 0.16,
+              });
+            }
+            collide(px, pz, 0.36);
+          } else if (free && rng() < 0.08) {
+            const yaw = pick([0, Math.PI / 2]);
+            const base = { x: cx + rnd(-0.2, 0.2), y: floorY, z: cz + rnd(-0.2, 0.2), yaw };
+            part('box', 'fabric', base, 0, 0.7, -0.5, { sx: 1.6, sy: 1.4, sz: 0.06 });
+            part('box', 'fabric', base, -0.8, 0.7, 0, { sx: 0.06, sy: 1.4, sz: 1.0 });
+            part('box', 'dark', base, 0, 0.02, -0.5, { sx: 1.62, sy: 0.04, sz: 0.09 });
+            for (const [lx, lz] of [[-0.55, -0.5], [0.55, -0.5], [-0.8, 0.05]]) {
+              const [wx, wz] = rot(lx, lz, yaw);
+              collide(base.x + wx, base.z + wz, 0.33);
+            }
+          }
+          if (!cell.rampDir && rng() < 0.22) {
+            const n = 4 + Math.floor(rng() * 5);
+            const px = cx + rnd(-1.4, 1.4);
+            const pz = cz + rnd(-1.4, 1.4);
+            for (let i = 0; i < n; i++) {
+              batch.add('plane', 'paper', px + rnd(-0.6, 0.6), floorY + 0.006 + i * 0.0006, pz + rnd(-0.6, 0.6), {
+                rx: -Math.PI / 2, ry: rng() * Math.PI * 2, sx: 0.21, sy: 0.3, sz: 1,
+                color: pick([0xd8d3c0, 0xcfc7a8, 0xe2ded0]),
+              });
+            }
+          }
+        }
+
+        /* ---------------- CAVE ---------------- */
+        if (region === 'cave') {
+          if (!cell.rampDir && !cell.hurdleDir) {
+            if (rng() < 0.35) {
+              const n = 1 + Math.floor(rng() * 2);
+              for (let i = 0; i < n; i++) {
+                const [px, pz] = ringPoint(1.15, 1.7);
+                const r = rnd(0.12, 0.34);
+                const hgt = rnd(0.5, 1.6);
+                batch.add('stalag', 'rock', px, floorY + hgt / 2 - 0.02, pz, {
+                  sx: r, sy: hgt, sz: r, rx: rnd(-0.08, 0.08), rz: rnd(-0.08, 0.08), ry: rng() * 3,
+                });
+                if (free && r > 0.2) collide(px, pz, r * 0.85);
+              }
+            }
+            if (rng() < 0.18) {
+              const [px, pz] = ringPoint(0.9, 1.7);
+              const sx = rnd(0.3, 0.7);
+              const sy = rnd(0.25, 0.55);
+              batch.add('ico', 'rock', px, floorY + sy * 0.55, pz, {
+                sx, sy, sz: rnd(0.3, 0.7), rx: rng(), ry: rng() * 3, rz: rng(),
+              });
+              if (free && sx > 0.4) collide(px, pz, sx * 0.85);
+            }
+            if (rng() < (isRoom ? 0.3 : 0.07)) {
+              const [px, pz] = ringPoint(0.6, 1.6);
+              const tint = pick([0x5ff0d0, 0x60c0ff, 0x8a7bff]);
+              const n = 3 + Math.floor(rng() * 3);
+              for (let i = 0; i < n; i++) {
+                const hgt = rnd(0.25, 0.7);
+                batch.add('cone', 'crystal', px + rnd(-0.18, 0.18), floorY + hgt / 2 - 0.02, pz + rnd(-0.18, 0.18), {
+                  sx: rnd(0.04, 0.09), sy: hgt, sz: rnd(0.04, 0.09), rx: rnd(-0.3, 0.3), rz: rnd(-0.3, 0.3),
+                  color: new THREE.Color(tint).multiplyScalar(rnd(0.7, 1.2)),
+                });
+              }
+              crystals.push({ x: px, y: floorY + 0.35, z: pz, c: new THREE.Color(tint), cx: x, cy: y, floorY });
+            }
+          }
+          if (rng() < 0.4) {
+            const n = 2 + Math.floor(rng() * 4);
+            for (let i = 0; i < n; i++) {
+              const r = rnd(0.07, 0.25);
+              const hgt = rnd(0.3, 1.4);
+              batch.add('stalag', 'rock', cx + rnd(-1.7, 1.7), wallTop - hgt / 2 + 0.02, cz + rnd(-1.7, 1.7), {
+                sx: r, sy: hgt, sz: r, rx: Math.PI, ry: rng() * 3, anchor: 'top',
+              });
+            }
+          }
+        }
+
+        /* ------------- MAINTENANCE -------------- */
+        if (region === 'maintenance') {
+          
+          for (const d of usable) {
+            if (rng() > 0.3) continue;
+            const D = DIRS[d];
+            const alongX = D.ix === 0;
+            const edges = this._edgeKeys(x, y, d);
+            const [px, pz] = wallSpot(d, 0.1, 0);
+            const py = wallTop - 0.45;
+            const color = pick([0x6b4a34, 0x4c4f4a, 0x2f4a3a, 0x7a6a30]);
+            batch.add('cyl', 'tinted', px, py, pz, {
+              sx: 0.08, sy: CELL, sz: 0.08, color, edges, anchor: 'top', ...(alongX ? { rz: Math.PI / 2 } : { rx: Math.PI / 2 }),
+            });
+            if (rng() < 0.6) {
+              batch.add('cyl', 'tinted', px, py - 0.2, pz, {
+                sx: 0.05, sy: CELL, sz: 0.05, color: pick([0x4c4f4a, 0x6b4a34]), edges, anchor: 'top',
+                ...(alongX ? { rz: Math.PI / 2 } : { rx: Math.PI / 2 }),
+              });
+            }
+          }
+          
+          if (!anyDoor) {
+            for (const [a, b] of [['n', 'w'], ['n', 'e'], ['s', 'w'], ['s', 'e']]) {
+              if (!usable.includes(a) || !usable.includes(b) || rng() > 0.12) continue;
+              const DA = DIRS[a];
+              const DB = DIRS[b];
+              const px = cx + DA.ex * (CELL / 2) + DB.ex * (CELL / 2) + DA.ix * 0.2 + DB.ix * 0.2;
+              const pz = cz + DA.ez * (CELL / 2) + DB.ez * (CELL / 2) + DA.iz * 0.2 + DB.iz * 0.2;
+              const hh = wallTop - floorY;
+              batch.add('cyl', 'tinted', px, floorY + hh / 2, pz, {
+                sx: 0.1, sy: hh, sz: 0.1, color: pick([0x6b4a34, 0x4c4f4a, 0x2f4a3a]),
+                edges: [...this._edgeKeys(x, y, a), ...this._edgeKeys(x, y, b)],
+                anchor: 'span', top: wallTop,
+              });
+            }
+          }
+          if (free && rng() < (isRoom ? 0.35 : 0.1)) {
+            const [px, pz] = ringPoint(0.9, 1.6);
+            batch.add('cyl', 'tinted', px, floorY + 0.425, pz, {
+              sx: 0.28, sy: 0.85, sz: 0.28, color: pick([0x6e3b26, 0x2f4a5c, 0x3a5a3a, 0x7a6a30]),
+            });
+            batch.add('cyl', 'dark', px, floorY + 0.86, pz, { sx: 0.24, sy: 0.03, sz: 0.24 });
+            collide(px, pz, 0.32);
+          } else if (free && rng() < (isRoom ? 0.3 : 0.08)) {
+            const [px, pz] = ringPoint(0.8, 1.5);
+            const yaw = rng() * Math.PI;
+            const sz = rnd(0.6, 0.85);
+            batch.add('box', 'crate', px, floorY + sz / 2, pz, { sx: sz, sy: sz, sz, ry: yaw });
+            if (rng() < 0.4) batch.add('box', 'crate', px, floorY + sz + 0.2, pz, { sx: 0.5, sy: 0.4, sz: 0.5, ry: yaw + 0.4 });
+            collide(px, pz, sz * 0.72);
+          }
+          if (usable.length && rng() < 0.06) {
+            const d = pick(usable);
+            const D = DIRS[d];
+            const [px, pz] = wallSpot(d, 0.06, rnd(-0.8, 0.8));
+            const edges = this._edgeKeys(x, y, d);
+            batch.add('box', 'panelBox', px, floorY + 1.5, pz, {
+              sx: D.ix === 0 ? 0.6 : 0.12, sy: 0.8, sz: D.iz === 0 ? 0.6 : 0.12, edges,
+            });
+            batch.add('box', 'basic', px + D.ix * 0.065, floorY + 1.7, pz + D.iz * 0.065, {
+              sx: D.ix === 0 ? 0.06 : 0.02, sy: 0.06, sz: D.iz === 0 ? 0.06 : 0.02, edges,
+              color: rng() < 0.5 ? 0xff3020 : 0x40ff70,
+            });
+          }
+        }
+
+        /* ---------------- LIBRARY ---------------- */
+        if (region === 'library') {
+          const BOOKS = [0x5a2a22, 0x2f3a2c, 0x2a2f4a, 0x4a3a22, 0x3a2a3a, 0x6a5a3a, 0x22302f, 0x502222];
+          const bookColor = () => new THREE.Color(pick(BOOKS)).multiplyScalar(rnd(0.7, 1.25));
+          if (free && usable.length && rng() < (isRoom ? 0.8 : 0.34)) {
+            
+            const d = pick(usable);
+            const H = rnd(2.0, 2.6);
+            const levels = Math.floor(H / 0.5);
+            const step = (H - 0.05) / levels;
+            const shift = rnd(-0.5, 0.5);
+            const depth = 0.38;
+            const mid = depth / 2 + 0.02;
+            wallBox(d, shift, 0.03, floorY + H / 2, 1.75, 0.04, H, 'woodDark');
+            for (const sgn of [-1, 1]) wallBox(d, shift + sgn * 0.86, mid, floorY + H / 2, 0.05, depth, H, 'woodDark');
+            for (let k = 0; k <= levels; k++) {
+              const py = floorY + 0.05 + k * step;
+              wallBox(d, shift, mid, py, 1.75, depth, 0.04, 'woodDark');
+              if (k === levels) break;
+              let a = -0.8;
+              while (a < 0.8) {
+                if (rng() < 0.07) {
+                  a += rnd(0.1, 0.3); 
+                  continue;
+                }
+                const bw = rnd(0.035, 0.085);
+                const bh = rnd(0.22, step - 0.07);
+                wallBox(d, shift + a + bw / 2, mid, py + 0.02 + bh / 2, bw, depth * 0.78, bh, 'matte', bookColor());
+                a += bw + 0.004;
+              }
+            }
+            for (const sgn of [-1, 1]) {
+              const [qx, qz] = wallSpot(d, mid, shift + sgn * 0.5);
+              collide(qx, qz, 0.42);
+            }
+          } else if (free && rng() < (isRoom ? 0.3 : 0.06)) {
+            
+            const yaw = pick([0, Math.PI / 2]) + rnd(-0.1, 0.1);
+            const base = { x: cx + rnd(-0.3, 0.3), y: floorY, z: cz + rnd(-0.3, 0.3), yaw };
+            part('box', 'woodDark', base, 0, 0.74, 0, { sx: 1.5, sy: 0.06, sz: 0.8 });
+            for (const [lx, lz] of [[-0.65, -0.32], [0.65, -0.32], [-0.65, 0.32], [0.65, 0.32]]) {
+              part('box', 'woodDark', base, lx, 0.355, lz, { sx: 0.07, sy: 0.71, sz: 0.07 });
+            }
+            const br = rnd(-0.4, 0.4);
+            part('box', 'matte', base, -0.2, 0.785, 0.05, { sx: 0.3, sy: 0.03, sz: 0.22, ry: br, color: bookColor() });
+            part('box', 'paper', base, -0.2, 0.803, 0.05, { sx: 0.27, sy: 0.01, sz: 0.19, ry: br, color: 0xd8d0b8 });
+            for (let i = 0; i < 3; i++) {
+              part('box', 'matte', base, 0.4, 0.785 + i * 0.05, 0.2, {
+                sx: 0.26 - i * 0.02, sy: 0.05, sz: 0.19, ry: rnd(-0.3, 0.3), color: bookColor(),
+              });
+            }
+            if (rng() < 0.6) {
+              part('cyl', 'bone', base, 0.45, 0.85, -0.2, { sx: 0.03, sy: 0.16, sz: 0.03 });
+              part('cone', 'basic', base, 0.45, 0.96, -0.2, { sx: 0.02, sy: 0.06, sz: 0.02, color: 0xffb060 });
+              const [gx, gz] = rot(0.45, -0.2, base.yaw);
+              crystals.push({
+                x: base.x + gx, y: floorY + 1.0, z: base.z + gz,
+                c: new THREE.Color(0xff9a3c).multiplyScalar(0.5), cx: x, cy: y, floorY,
+              });
+            }
+            const cb = { x: base.x, y: floorY, z: base.z, yaw: yaw + rnd(-0.5, 0.5) };
+            const [ox, oz] = rot(0, 0.85, yaw);
+            cb.x += ox;
+            cb.z += oz;
+            part('box', 'woodDark', cb, 0, 0.45, 0, { sx: 0.42, sy: 0.05, sz: 0.42 });
+            part('box', 'woodDark', cb, 0, 0.75, 0.2, { sx: 0.42, sy: 0.6, sz: 0.04 });
+            for (const [lx, lz] of [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]]) {
+              part('box', 'woodDark', cb, lx, 0.215, lz, { sx: 0.04, sy: 0.43, sz: 0.04 });
+            }
+            collide(base.x, base.z, 0.75);
+          }
+          if (free && rng() < 0.16) {
+            
+            const px = cx + rnd(-1.3, 1.3);
+            const pz = cz + rnd(-1.3, 1.3);
+            const n = 3 + Math.floor(rng() * 4);
+            for (let i = 0; i < n; i++) {
+              batch.add('box', 'matte', px + rnd(-0.5, 0.5), floorY + 0.025, pz + rnd(-0.5, 0.5), {
+                sx: 0.2, sy: 0.05, sz: 0.28, ry: rng() * Math.PI * 2, color: bookColor(),
+              });
+            }
+            for (let i = 0; i < 3; i++) {
+              batch.add('plane', 'paper', px + rnd(-0.7, 0.7), floorY + 0.007 + i * 0.0006, pz + rnd(-0.7, 0.7), {
+                rx: -Math.PI / 2, ry: rng() * Math.PI * 2, sx: 0.21, sy: 0.3, sz: 1, color: 0xcfc7a8,
+              });
+            }
+          }
+          cornerWebs(x, y, cx, cz, usable, anyDoor, 0.16);
+        }
+
+        /* ---------------- POOLROOMS ---------------- */
+        if (region === 'pool') {
+          if (free && rng() < (isRoom ? 0.3 : 0.07)) {
+            
+            const [px, pz] = ringPoint(0.7, 1.4);
+            const s = rnd(0.5, 0.7);
+            const hh = wallTop - floorY;
+            batch.add('box', 'tile', px, floorY + hh / 2, pz, { sx: s, sy: hh, sz: s, anchor: 'span', top: wallTop });
+            batch.add('box', 'matte', px, floorY + 1.1, pz, { sx: s + 0.02, sy: 0.3, sz: s + 0.02, color: 0x2b6f7a });
+            collide(px, pz, s * 0.78);
+          } else if (free && rng() < 0.06) {
+            
+            const [px, pz] = ringPoint(0.8, 1.6);
+            const base = { x: px, y: floorY, z: pz, yaw: pick([0, Math.PI / 2]) };
+            part('box', 'tile', base, 0, 0.42, 0, { sx: 1.3, sy: 0.08, sz: 0.4 });
+            for (const s of [-0.5, 0.5]) part('box', 'metalGrey', base, s, 0.19, 0, { sx: 0.06, sy: 0.38, sz: 0.36 });
+            collide(px, pz, 0.6);
+          } else if (free && rng() < 0.05) {
+            
+            const [px, pz] = ringPoint(0.5, 1.6);
+            batch.add('sphere', 'matte', px, floorY + 0.26, pz, {
+              sx: 0.26, sy: 0.26, sz: 0.26, color: pick([0xd23030, 0xe8e8e0, 0x2a6fd2]),
+            });
+            collide(px, pz, 0.28);
+          }
+          if (free && usable.length && rng() < 0.08) {
+            
+            const d = pick(usable);
+            const ns = DIRS[d].ix === 0;
+            const along = rnd(-1.2, 1.2);
+            const edges = this._edgeKeys(x, y, d);
+            for (const s of [-0.22, 0.22]) {
+              const [px, pz] = wallSpot(d, 0.14, along + s);
+              batch.add('cyl', 'metalGrey', px, floorY + 0.95, pz, { sx: 0.022, sy: 1.9, sz: 0.022, edges });
+            }
+            for (let k = 0; k < 5; k++) {
+              const [px, pz] = wallSpot(d, 0.14, along);
+              batch.add('cyl', 'metalGrey', px, floorY + 0.35 + k * 0.32, pz, {
+                sx: 0.015, sy: 0.44, sz: 0.015, edges, ...(ns ? { rz: Math.PI / 2 } : { rx: Math.PI / 2 }),
+              });
+            }
+          }
+          if (free && rng() < 0.1) {
+            
+            const [px, pz] = ringPoint(0, 1.2);
+            const gb = { x: px, y: floorY, z: pz, yaw: rng() * 0.6 };
+            part('box', 'dark', gb, 0, 0.012, 0, { sx: 0.5, sy: 0.024, sz: 0.5 });
+            for (let k = -2; k <= 2; k++) part('box', 'iron', gb, k * 0.09, 0.03, 0, { sx: 0.025, sy: 0.02, sz: 0.46 });
+          }
+          if (free && rng() < 0.3) {
+            batch.add('sphere', 'puddle', cx + rnd(-1.2, 1.2), floorY, cz + rnd(-1.2, 1.2), {
+              sx: rnd(0.4, 0.9), sy: 0.012, sz: rnd(0.3, 0.7), ry: rng() * Math.PI,
+            });
+          }
+        }
+
+        /* ---------------- SEWER ---------------- */
+        if (region === 'sewer') {
+          
+          for (const d of usable) {
+            if (rng() > 0.26) continue;
+            const alongX = DIRS[d].ix === 0;
+            const edges = this._edgeKeys(x, y, d);
+            const [px, pz] = wallSpot(d, 0.2, 0);
+            const py = wallTop - 0.75;
+            const color = pick([0x4a5a3a, 0x5a3a2a, 0x3a4a4a, 0x6b4a34]);
+            const rotO = alongX ? { rz: Math.PI / 2 } : { rx: Math.PI / 2 };
+            batch.add('cyl', 'tinted', px, py, pz, { sx: 0.17, sy: CELL, sz: 0.17, color, edges, anchor: 'top', ...rotO });
+            for (const off of [-1.1, 1.1]) {
+              batch.add('cyl', 'iron', px + (alongX ? off : 0), py, pz + (alongX ? 0 : off), {
+                sx: 0.21, sy: 0.1, sz: 0.21, edges, anchor: 'top', ...rotO,
+              });
+            }
+          }
+          if (rng() < 0.35) {
+            
+            const n = 1 + Math.floor(rng() * 3);
+            for (let i = 0; i < n; i++) {
+              const r = rnd(0.05, 0.13);
+              const hgt = rnd(0.25, 0.9);
+              batch.add('stalag', 'slime', cx + rnd(-1.7, 1.7), wallTop - hgt / 2 + 0.02, cz + rnd(-1.7, 1.7), {
+                sx: r, sy: hgt, sz: r, rx: Math.PI, ry: rng() * 3, anchor: 'top',
+              });
+            }
+          }
+          if (free && rng() < (isRoom ? 0.3 : 0.07)) {
+            
+            const [px, pz] = ringPoint(0.8, 1.6);
+            batch.add('cyl', 'tinted', px, floorY + 0.28, pz, {
+              sx: 0.28, sy: 0.85, sz: 0.28, rz: Math.PI / 2, ry: rng() * Math.PI,
+              color: pick([0x6e3b26, 0x3a4a3a, 0x4a4438]),
+            });
+            collide(px, pz, 0.45);
+          }
+          if (free && rng() < 0.12) {
+            
+            const [px, pz] = ringPoint(0, 1.2);
+            const gb = { x: px, y: floorY, z: pz, yaw: pick([0, 0.3]) };
+            part('box', 'dark', gb, 0, 0.02, 0, { sx: 0.9, sy: 0.04, sz: 0.9 });
+            for (let k = -2; k <= 2; k++) part('box', 'iron', gb, k * 0.17, 0.05, 0, { sx: 0.04, sy: 0.03, sz: 0.86 });
+          }
+          if (free && rng() < 0.35) {
+            batch.add('sphere', 'slime', cx + rnd(-1.3, 1.3), floorY, cz + rnd(-1.3, 1.3), {
+              sx: rnd(0.4, 1.0), sy: 0.012, sz: rnd(0.3, 0.8), ry: rng() * Math.PI,
+            });
+          }
+          if (free && rng() < 0.06) {
+            
+            const [px, pz] = ringPoint(0.3, 1.6);
+            const rb = { x: px, y: floorY, z: pz, yaw: rng() * Math.PI * 2 };
+            part('sphere', 'char', rb, 0, 0.07, 0, { sx: 0.13, sy: 0.07, sz: 0.07 });
+            part('sphere', 'char', rb, 0.13, 0.075, 0, { sx: 0.06, sy: 0.05, sz: 0.05 });
+            part('cyl', 'char', rb, -0.24, 0.03, 0, { sx: 0.008, sy: 0.24, sz: 0.008, rz: Math.PI / 2 });
+            for (const s of [-0.025, 0.025]) part('sphere', 'basic', rb, 0.17, 0.09, s, { sx: 0.008, sy: 0.008, sz: 0.008, color: 0xff2010 });
+          }
+        }
+
+        /* ---------------- CRYPT ---------------- */
+        if (region === 'crypt') {
+          if (free && rng() < (isRoom ? 0.35 : 0.08)) {
+            
+            const yaw = pick([0, Math.PI / 2]) + rnd(-0.1, 0.1);
+            const base = { x: cx + rnd(-0.2, 0.2), y: floorY, z: cz + rnd(-0.2, 0.2), yaw };
+            const ajar = rng() < 0.4;
+            part('box', 'stone', base, 0, 0.3, 0, { sx: 1.9, sy: 0.6, sz: 0.85 });
+            part('box', 'stone', base, ajar ? 0.3 : 0, 0.66, ajar ? 0.08 : 0, { sx: 2.0, sy: 0.12, sz: 0.95, ry: ajar ? rnd(0.08, 0.2) : 0 });
+            part('box', 'bone', base, ajar ? 0.4 : 0.1, 0.73, ajar ? 0.08 : 0, { sx: 0.5, sy: 0.02, sz: 0.06 });
+            part('box', 'bone', base, ajar ? 0.3 : 0, 0.73, ajar ? 0.08 : 0, { sx: 0.06, sy: 0.02, sz: 0.4 });
+            for (const s of [-0.55, 0.55]) {
+              const [wx, wz] = rot(s, 0, yaw);
+              collide(base.x + wx, base.z + wz, 0.7);
+            }
+          } else if (free && rng() < (isRoom ? 0.3 : 0.1)) {
+            
+            const [px, pz] = ringPoint(0.7, 1.6);
+            const n = 4 + Math.floor(rng() * 4);
+            for (let i = 0; i < n; i++) {
+              const layer = i > 3 ? 0.13 : 0;
+              const sx = px + rnd(-0.22, 0.22);
+              const sz = pz + rnd(-0.22, 0.22);
+              const yaw = rng() * Math.PI * 2;
+              const sb = { x: sx, y: floorY, z: sz, yaw };
+              part('sphere', 'bone', sb, 0, 0.075 + layer, 0, { sx: 0.075, sy: 0.08, sz: 0.085 });
+              for (const s of [-0.03, 0.03]) part('sphere', 'char', sb, 0.06, 0.09 + layer, s, { sx: 0.02, sy: 0.025, sz: 0.02 });
+            }
+            for (let k = 0; k < 4; k++) {
+              batch.add('cyl', 'bone', px + rnd(-0.4, 0.4), floorY + 0.02, pz + rnd(-0.4, 0.4), {
+                sx: 0.02, sy: rnd(0.25, 0.4), sz: 0.02, rz: Math.PI / 2, ry: rng() * 3,
+              });
+            }
+            collide(px, pz, 0.3);
+          }
+          if (free && rng() < (isRoom ? 0.35 : 0.14)) {
+            
+            const [px, pz] = ringPoint(0.5, 1.6);
+            const n = 3 + Math.floor(rng() * 3);
+            for (let i = 0; i < n; i++) {
+              const h = rnd(0.08, 0.25);
+              const qx = px + rnd(-0.14, 0.14);
+              const qz = pz + rnd(-0.14, 0.14);
+              batch.add('cyl', 'bone', qx, floorY + h / 2, qz, { sx: 0.025, sy: h, sz: 0.025 });
+              batch.add('cone', 'basic', qx, floorY + h + 0.03, qz, { sx: 0.018, sy: 0.06, sz: 0.018, color: 0xffb060 });
+            }
+            crystals.push({
+              x: px, y: floorY + 0.3, z: pz,
+              c: new THREE.Color(0xff9a3c).multiplyScalar(0.55), cx: x, cy: y, floorY,
+            });
+          }
+          if (free && rng() < (isRoom ? 0.25 : 0.07)) {
+            
+            const [px, pz] = ringPoint(0.8, 1.5);
+            const hh = wallTop - floorY;
+            batch.add('cyl', 'stone', px, floorY + hh / 2, pz, { sx: 0.3, sy: hh, sz: 0.3, anchor: 'span', top: wallTop });
+            batch.add('cyl', 'stone', px, floorY + 0.12, pz, { sx: 0.44, sy: 0.24, sz: 0.44 });
+            batch.add('cyl', 'stone', px, wallTop - 0.12, pz, { sx: 0.44, sy: 0.24, sz: 0.44, anchor: 'top' });
+            collide(px, pz, 0.4);
+          }
+          if (free && usable.length && rng() < (isRoom ? 0.5 : 0.14)) {
+            
+            const d = pick(usable);
+            const shift = rnd(-0.4, 0.4);
+            wallBox(d, shift, 0.06, floorY + 0.95, 1.8, 0.1, 1.9, 'stone');
+            for (const py of [0.55, 1.35]) {
+              wallBox(d, shift, 0.28, floorY + py, 1.7, 0.5, 0.1, 'stone');
+              wallBox(d, shift - 0.05, 0.28, floorY + py + 0.14, 1.25, 0.28, 0.18, 'bone', 0xa39c8a);
+              const [qx, qz] = wallSpot(d, 0.28, shift + 0.72);
+              batch.add('sphere', 'bone', qx, floorY + py + 0.19, qz, { sx: 0.09, sy: 0.1, sz: 0.09 });
+            }
+            for (const sgn of [-1, 1]) {
+              const [qx, qz] = wallSpot(d, 0.28, shift + sgn * 0.5);
+              collide(qx, qz, 0.4);
+            }
+          }
+          if (rng() < 0.1) {
+            
+            const len = rnd(0.5, 1.2);
+            const qx = cx + rnd(-1.5, 1.5);
+            const qz = cz + rnd(-1.5, 1.5);
+            batch.add('cyl', 'iron', qx, wallTop - len / 2, qz, { sx: 0.012, sy: len, sz: 0.012, anchor: 'top' });
+            batch.add('cyl6', 'iron', qx, wallTop - len, qz, { sx: 0.06, sy: 0.03, sz: 0.06, anchor: 'top' });
+          }
+          cornerWebs(x, y, cx, cz, usable, anyDoor, 0.14);
+        }
+      }
+    }
+
+    
+    if (this._pockets) {
+      for (const ent of this._pockets.entrances) {
+        const D = DIRS[ent.dir];
+        const pc = grid[ent.py][ent.px];
+        const floorY = (pc.elevation || 0) * this.STEP;
+        batch.cur = { x: ent.px, y: ent.py, floorY };
+        const wx = originX + ent.px * CELL + CELL / 2 + D.ex * (CELL / 2);
+        const wz = originZ + ent.py * CELL + CELL / 2 + D.ez * (CELL / 2);
+        for (const side of [1, -1]) {
+          const n = 4 + Math.floor(rng() * 3);
+          for (let i = 0; i < n; i++) {
+            const along = rnd(-1.3, 1.3);
+            const off = side * rnd(0.28, 0.6);
+            const size = rnd(0.06, 0.2);
+            batch.add('ico', 'rock',
+              wx + D.ex * off + (D.ex === 0 ? along : 0),
+              floorY + size * 0.5,
+              wz + D.ez * off + (D.ez === 0 ? along : 0),
+              { sx: size, sy: size * rnd(0.6, 1), sz: size, rx: rng(), ry: rng() * 3, rz: rng() });
+          }
+        }
+      }
+    }
+
+    batch.cur = null;
+    batch.finalize();
+
+    
+    if (crystals.length) {
+      const pos = new Float32Array(crystals.length * 3);
+      const colArr = new Float32Array(crystals.length * 3);
+      crystals.forEach((c, i) => {
+        pos.set([c.x, c.y, c.z], i * 3);
+        colArr.set([c.c.r * 0.5, c.c.g * 0.5, c.c.b * 0.5], i * 3);
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+      const mat = new THREE.PointsMaterial({
+        size: 1.6, map: this.haloTexture(), vertexColors: true,
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      group.add(pts);
+      this._levelGeos.push(geo);
+      this._decorMats = [mat];
+      this._crystalGlow = { geo, list: crystals };
+    } else {
+      this._crystalGlow = null;
+    }
+
+    this.scene.add(group);
+    this._decor = { group, batch };
+  }
+  /** keep all floor decor (props, rocks, crystal glows) sitting on the floor after cell elevations change */
+  refreshDecorHeights(grid) {
+    if (!this._decor || !grid) return;
+    const floorOf = (x, y) => ((grid[y] && grid[y][x] && grid[y][x].elevation) || 0) * this.STEP;
+    this._decor.batch.refreshHeights(floorOf);
+    const glow = this._crystalGlow;
+    if (glow) {
+      const attr = glow.geo.attributes.position;
+      glow.list.forEach((c, i) => {
+        const fy = floorOf(c.cx, c.cy);
+        if (fy === c.floorY) return;
+        c.y += fy - c.floorY;
+        c.floorY = fy;
+        attr.setY(i, c.y);
+      });
+      attr.needsUpdate = true;
+    }
+  }
+  _disposeDecor() {
+    const D = this._decor;
+    if (!D) return;
+    this.scene.remove(D.group);
+    D.group.traverse((o) => {
+      if (o.isInstancedMesh) o.dispose();
+    });
+    if (this._decorMats) this._decorMats.forEach((m) => m.dispose());
+    this._decorMats = null;
+    this._decor = null;
+  }
+
+  /* ---- per-frame ---- */
+  update(dt, player) {
+    
+    const region = this.regionAt(player.x, player.z);
+    if (region) {
+      if (region !== this.currentRegion) {
+        this.currentRegion = region;
+        if (this.onRegionChange) this.onRegionChange(region);
+      }
+      this._fogTarget.set(REGION_FOG[region] ?? REGION_FOG.house);
+      const fog = this.scene.fog;
+      if (fog && fog.color) fog.color.lerp(this._fogTarget, Math.min(1, dt * 1.5));
+    }
+
+    const L = this._lights;
+    if (!L) return;
+    L.time += dt;
+    const t = L.time;
+    const tmp = this._tmpColor || (this._tmpColor = new THREE.Color());
+    const dirtyColor = new Set();
+    const dirtyMatrix = new Set();
+
+    
+    for (const l of L.flickerers) {
+      let lvl;
+      if (l.kind === 'panel') {
+        lvl = 0.92 + 0.08 * Math.sin(t * 55 + l.phase);
+        if (((t * 0.21 + l.phase) % 1) < 0.05) lvl = Math.sin(t * 70 + l.phase) > 0 ? 0.9 : 0.08;
+      } else if (l.kind === 'bulb') {
+        lvl = 0.9 + 0.1 * Math.sin(t * 40 + l.phase);
+        if (((t * 0.19 + l.phase) % 1) < 0.06) lvl = Math.sin(t * 45 + l.phase * 2) > 0.2 ? 0.7 : 0.05;
+      } else {
+        lvl = 0.8 + 0.2 * Math.sin(t * 21 + l.phase) * Math.sin(t * 6.7 + l.phase * 2);
+        if (((t * 0.17 + l.phase) % 1) < 0.035) lvl = 0.05 + Math.random() * 0.2;
+      }
+      l.level = lvl;
+      tmp.copy(l.baseColor).multiplyScalar(lvl);
+      l.mesh.setColorAt(l.index, tmp);
+      dirtyColor.add(l.mesh);
+      if (l.halo) {
+        l.halo.arr[l.halo.i] = tmp.r * l.halo.mult;
+        l.halo.arr[l.halo.i + 1] = tmp.g * l.halo.mult;
+        l.halo.arr[l.halo.i + 2] = tmp.b * l.halo.mult;
+      }
+    }
+    
+    for (const l of L.torches) {
+      if (l.removed) continue;
+      const sy = 0.85 + 0.15 * Math.sin(t * 13 + l.phase) + 0.1 * Math.sin(t * 31.7 + l.phase * 1.7);
+      const sx = 0.92 + 0.12 * Math.sin(t * 17 + l.phase * 3);
+      this._setFlame(l, sy, sx);
+      dirtyMatrix.add(l.mesh).add(l.mesh2);
+      dirtyColor.add(l.mesh).add(l.mesh2);
+      const lvl = Math.max(0.35, sy);
+      l.level = lvl;
+      tmp.copy(l.baseColor).multiplyScalar(0.8 + lvl * 0.4);
+      l.mesh.setColorAt(l.index, tmp);
+      tmp.copy(l.baseColor2).multiplyScalar(0.8 + lvl * 0.4);
+      l.mesh2.setColorAt(l.index, tmp);
+      if (l.halo) {
+        l.halo.arr[l.halo.i] = l.baseColor.r * l.halo.mult * lvl;
+        l.halo.arr[l.halo.i + 1] = l.baseColor.g * l.halo.mult * lvl;
+        l.halo.arr[l.halo.i + 2] = l.baseColor.b * l.halo.mult * lvl;
+      }
+    }
+    dirtyColor.forEach((m) => { m.instanceColor.needsUpdate = true; });
+    dirtyMatrix.forEach((m) => { m.instanceMatrix.needsUpdate = true; });
+    for (const { geo } of L.halos) geo.attributes.color.needsUpdate = true;
+
+    
+    L.reassignIn -= dt;
+    if (L.reassignIn <= 0) {
+      L.reassignIn = 0.12;
+      const maxD2 = LIGHT_DISTANCE * LIGHT_DISTANCE;
+      const best = [];
+      for (const l of L.lit) {
+        if (l.removed) continue;
+        const dx = l.x - player.x;
+        const dy = l.y - player.y;
+        const dz = l.z - player.z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > maxD2) continue;
+        if (best.length < POOL_SIZE) {
+          best.push({ l, d2 });
+          best.sort((a, b) => a.d2 - b.d2);
+        } else if (d2 < best[best.length - 1].d2) {
+          best[best.length - 1] = { l, d2 };
+          best.sort((a, b) => a.d2 - b.d2);
+        }
+      }
+      const wanted = new Set(best.map((b) => b.l));
+      const free = [];
+      for (const p of L.pool) {
+        if (p.lamp && !p.lamp.removed && wanted.has(p.lamp)) wanted.delete(p.lamp);
+        else free.push(p);
+      }
+      for (const p of free) {
+        const next = wanted.values().next().value;
+        if (next) {
+          wanted.delete(next);
+          p.lamp = next;
+          p.fade = 0;
+          p.light.color.copy(next.lightColor);
+          p.light.position.set(next.lightX ?? next.x, next.lightY, next.lightZ ?? next.z);
+        } else {
+          p.lamp = null;
+        }
+      }
+    }
+    for (const p of L.pool) {
+      const alive = p.lamp && !p.lamp.removed;
+      p.fade += ((alive ? 1 : 0) - p.fade) * Math.min(1, dt * 6);
+      p.light.intensity = alive
+        ? LIGHT_INTENSITY * p.lamp.power * p.lamp.level * p.fade
+        : p.fade > 0.01 ? p.light.intensity * 0.8 : 0;
+    }
+  }
+
+  /* ---- teardown ---- */
+  clear() {
+    this._disposeLights();
+    this._disposeDecor();
+    if (this._ceil) {
+      this.scene.remove(this._ceil);
+      this._ceil.traverse((o) => {
+        if (o.isInstancedMesh) o.dispose();
+      });
+      this._ceil = null;
+    }
+    this._levelGeos.forEach((g) => g.dispose());
+    this._levelGeos = [];
+    this.currentRegion = null;
+  }
+  dispose() {
+    this.clear();
+    Object.values(this._geos).forEach((g) => g.dispose());
+    Object.values(this._mats).forEach((m) => m.dispose());
+    Object.values(this._texs).forEach((t) => t.dispose());
+    Object.values(this._floorMats).forEach((m) => m && m.dispose());
+    Object.values(this._ceilMats).forEach((m) => m.dispose());
+    Object.values(this._wallSets).forEach((set) => set.forEach((s) => s.m.dispose()));
+    this._geos = {};
+    this._mats = {};
+    this._texs = {};
+    this._floorMats = {};
+    this._ceilMats = {};
+    this._wallSets = {};
+  }
+}
+
+/**
+ * Seals off dead-end branches of the maze and turns them into claustrophobic caves.
+ * A branch qualifies when it hangs off the rest of the maze by a single passage (a bridge).
+ * That passage becomes a wall with a crawl hole, so the cave can only be entered by crawling.
+ */
+function carveCavePockets(grid, w, h, rng, { forbidden, count, minSize, maxSize }) {
+  const DELTA = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+  const OPP = { n: 's', s: 'n', e: 'w', w: 'e' };
+  const inB = (x, y) => x >= 0 && y >= 0 && x < w && y < h;
+  const hasDoor = (c) =>
+    c.doorN || c.doorS || c.doorE || c.doorW || c.hatchN || c.hatchS || c.hatchE || c.hatchW;
+  const hasCrawl = (c) => c.crawlN || c.crawlS || c.crawlE || c.crawlW;
+  const passable = (c, d) => !c[d] || c[`door${d.toUpperCase()}`] || c[`hatch${d.toUpperCase()}`];
+  const taken = new Set();
+  const cells = [];
+  const entrances = [];
+
+  const collect = (sx, sy, ax, ay, elev) => {
+    const seen = new Set([`${sx},${sy}`]);
+    const queue = [[sx, sy]];
+    const out = [];
+    while (queue.length) {
+      const [x, y] = queue.shift();
+      const c = grid[y][x];
+      const k = `${x},${y}`;
+      if (
+        (forbidden && forbidden.has(k)) || taken.has(k) || c.roomId != null || c.rampDir ||
+        (c.elevation || 0) !== elev || hasDoor(c) || hasCrawl(c)
+      ) return null;
+      out.push([x, y]);
+      if (out.length > maxSize) return null;
+      for (const d of ['n', 's', 'e', 'w']) {
+        if (!passable(c, d)) continue;
+        const nx = x + DELTA[d][0];
+        const ny = y + DELTA[d][1];
+        if (!inB(nx, ny)) continue;
+        if (x === sx && y === sy && nx === ax && ny === ay) continue; 
+        if (nx === ax && ny === ay) return null; 
+        const nk = `${nx},${ny}`;
+        if (!seen.has(nk)) {
+          seen.add(nk);
+          queue.push([nx, ny]);
+        }
+      }
+    }
+    return out.length >= minSize ? out : null;
+  };
+
+  for (let attempt = 0; attempt < count; attempt++) {
+    const cands = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        for (const d of ['e', 's']) {
+          const a = grid[y][x];
+          if (a[d]) continue; 
+          const bx = x + DELTA[d][0];
+          const by = y + DELTA[d][1];
+          if (!inB(bx, by)) continue;
+          const b = grid[by][bx];
+          for (const [outX, outY, inX, inY, dirOutToIn] of [
+            [x, y, bx, by, d],
+            [bx, by, x, y, OPP[d]],
+          ]) {
+            const outside = grid[outY][outX];
+            if (taken.has(`${outX},${outY}`) || outside.roomId != null || outside.rampDir || hasDoor(outside)) continue;
+            const comp = collect(inX, inY, outX, outY, outside.elevation || 0);
+            if (comp) cands.push({ comp, outX, outY, inX, inY, dirOutToIn });
+          }
+          void b;
+        }
+      }
+    }
+    if (!cands.length) break;
+    const pick = cands[Math.floor(rng() * cands.length)];
+    const outside = grid[pick.outY][pick.outX];
+    const inside = grid[pick.inY][pick.inX];
+    const dIn = pick.dirOutToIn;
+    const dOut = OPP[dIn];
+    outside[dIn] = true;
+    inside[dOut] = true;
+    outside[`crawl${dIn.toUpperCase()}`] = true;
+    inside[`crawl${dOut.toUpperCase()}`] = true;
+    if (outside.hurdleDir === dIn) outside.hurdleDir = null;
+    const inSet = new Set(pick.comp.map(([x, y]) => `${x},${y}`));
+    for (const [x, y] of pick.comp) {
+      grid[y][x].hurdleDir = null;
+      taken.add(`${x},${y}`);
+      cells.push([x, y]);
+    }
+    entrances.push({ px: pick.inX, py: pick.inY, ox: pick.outX, oy: pick.outY, dir: dOut });
+    
+    if (rng() < 0.5) {
+      const extra = [];
+      for (const [x, y] of pick.comp) {
+        const c = grid[y][x];
+        for (const d of ['n', 's', 'e', 'w']) {
+          if (!c[d] || c[`door${d.toUpperCase()}`] || c[`hatch${d.toUpperCase()}`] || c[`crawl${d.toUpperCase()}`]) continue;
+          const nx = x + DELTA[d][0];
+          const ny = y + DELTA[d][1];
+          if (!inB(nx, ny) || inSet.has(`${nx},${ny}`) || taken.has(`${nx},${ny}`)) continue;
+          const n = grid[ny][nx];
+          if (n.roomId != null || n.rampDir || hasDoor(n) || hasCrawl(n)) continue;
+          if ((n.elevation || 0) !== (c.elevation || 0)) continue;
+          extra.push({ x, y, d, nx, ny });
+        }
+      }
+      if (extra.length) {
+        const e = extra[Math.floor(rng() * extra.length)];
+        grid[e.y][e.x][`crawl${e.d.toUpperCase()}`] = true;
+        grid[e.ny][e.nx][`crawl${OPP[e.d].toUpperCase()}`] = true;
+        entrances.push({ px: e.x, py: e.y, ox: e.nx, oy: e.ny, dir: e.d });
+      }
+    }
+  }
+  return { cells, entrances };
+}
+
 export class MazeGame {
   constructor(container, callbacks = {}) {
     this.container = container;
@@ -1954,6 +4573,17 @@ export class MazeGame {
     this._torchRaycaster = new THREE.Raycaster();
     this._torchNearFactor = 1;
     this._initThree();
+    this._wallCtxRegion = null;
+    this.regionMap = null;
+    this.regions = new RegionManager({
+      scene: this.scene,
+      CELL,
+      STEP_HEIGHT,
+      edgeKey: (x, y, d) => this._edgeKey(x, y, d),
+      onRegionChange: (r) => {
+        if (this.callbacks.onRegionChange) this.callbacks.onRegionChange(r);
+      },
+    });
     this._buildAtmosphere();
     this._bindInput();
     this._animate = this._animate.bind(this);
@@ -2420,6 +5050,15 @@ export class MazeGame {
   }
   _pickWallMaterial() {
     const rng = this.rng || Math.random;
+    if (this.regions && this._wallCtxRegion) {
+      const rr = this._regionRng || (this._regionRng = createRng(hashSeed(`${this.baseSeed}_wallpick`)));
+      const cellCtx = this._wallCtxCell;
+      const region = cellCtx ? this.regions.wallRegionAt(cellCtx[0], cellCtx[1], rr) : this._wallCtxRegion;
+      if (region && region !== 'house') {
+        const m = this.regions.wallMaterial(region, rr);
+        if (m) return m;
+      }
+    }
     const palette = this._wallPalette;
     if (!palette) return this._wallMat;
     const total = WALL_STYLE_WEIGHTS.reduce((sum, w) => sum + w.weight, 0);
@@ -2494,6 +5133,7 @@ export class MazeGame {
     this._shortcutDoorByEdge = new Map();
     this._shortcutDoorLookTarget = null;
     if (this.ceilMesh) this.scene.remove(this.ceilMesh);
+    if (this.regions) this.regions.clear();
     if (this.furnitureMeshes) {
       for (const m of this.furnitureMeshes) this.scene.remove(m);
     }
@@ -2530,6 +5170,7 @@ export class MazeGame {
     wallMesh.add(stain);
   }
   _maybeAddPainting(wallMesh, axis) {
+    if (this._wallCtxRegion && this._wallCtxRegion !== 'house') return;
     const rng = this.rng || Math.random;
     if ((this._paintingCount || 0) >= (this._paintingCap ?? PAINTING_MAX_PER_MAZE_BASE)) return;
     if (rng() > PAINTING_CHANCE) return;
@@ -2592,6 +5233,9 @@ export class MazeGame {
       }
     }
   }
+  _floorMat(key) {
+    return this._floorMaterials[key] || (this.regions && this.regions.floorMaterial(key)) || this._floorMaterials.stone;
+  }
   _buildFloor(w, h) {
     const FLOOR_THICKNESS = 4.0;
     const floorGeo = new THREE.BoxGeometry(CELL, FLOOR_THICKNESS, CELL);
@@ -2608,7 +5252,10 @@ export class MazeGame {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const cell = this.maze[y][x];
-        const type = (this.surfaceMap[y] && this.surfaceMap[y][x]) || 'stone';
+        const surface = (this.surfaceMap[y] && this.surfaceMap[y][x]) || 'stone';
+        const type = this.regions && this.regionMap
+          ? this.regions.floorKey(this.regions.visual(x, y, 'floor'), surface, cell.roomId != null)
+          : surface;
         if (cell.rampDir) {
           rampCells.push({
             x,
@@ -2617,14 +5264,14 @@ export class MazeGame {
             cell,
           });
         } else {
-          (groups[type] || groups.stone).push([x, y, cell.elevation || 0]);
+          (groups[type] || (groups[type] = [])).push([x, y, cell.elevation || 0]);
         }
       }
     }
     const matrix = new THREE.Matrix4();
     Object.entries(groups).forEach(([type, cells]) => {
       if (!cells.length) return;
-      const mesh = new THREE.InstancedMesh(floorGeo, this._floorMaterials[type], cells.length);
+      const mesh = new THREE.InstancedMesh(floorGeo, this._floorMat(type), cells.length);
       cells.forEach(([x, y, elevation], i) => {
         const cx = originX + x * CELL + CELL / 2;
         const cz = originZ + y * CELL + CELL / 2;
@@ -2644,7 +5291,7 @@ export class MazeGame {
       const ownY = (cell.elevation || 0) * STEP_HEIGHT;
       const neighborY = this._neighborElevationFor(x, y, cell.rampDir) * STEP_HEIGHT;
       const geo = makeRampGeometry(CELL, ownY, neighborY, cell.rampDir);
-      const mesh = new THREE.Mesh(geo, this._floorMaterials[type]);
+      const mesh = new THREE.Mesh(geo, this._floorMat(type));
       mesh.position.set(cx, 0, cz);
       mesh.receiveShadow = true;
       this.scene.add(mesh);
@@ -2763,6 +5410,7 @@ export class MazeGame {
     for (const room of rooms) {
       if (!room.furniture || !room.furniture.length) continue;
       for (const item of room.furniture) {
+        if (this.regionMap && this.regionMap[item.y][item.x] !== 'house') continue;
         const cell = this.maze[item.y][item.x];
         const floorY = (cell.elevation || 0) * STEP_HEIGHT;
         const cx = ox + item.x * CELL + CELL / 2 + item.localX * CELL;
@@ -3098,11 +5746,7 @@ export class MazeGame {
       PAINTING_MAX_PER_MAZE_BASE + w * h * PAINTING_MAX_PER_MAZE_PER_CELL,
     );
     this._buildHurdleMaterialPalette();
-    const ceilMat = new THREE.MeshStandardMaterial({
-      color: 0x050506,
-      roughness: 1,
-    });
-    let minElev = 0,
+        let minElev = 0,
       maxElev = 0;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -3153,6 +5797,8 @@ export class MazeGame {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const cell = grid[y][x];
+        this._wallCtxRegion = this.regionMap ? this.regionMap[y][x] : null;
+        this._wallCtxCell = [x, y];
         const cx = originX + x * CELL + CELL / 2;
         const cz = originZ + y * CELL + CELL / 2;
         const floorY = (cell.elevation || 0) * STEP_HEIGHT;
@@ -3239,10 +5885,15 @@ export class MazeGame {
       }
     }
     this._buildFloor(w, h);
-    this.ceilMesh = new THREE.Mesh(new THREE.PlaneGeometry(w * CELL, h * CELL), ceilMat);
-    this.ceilMesh.rotation.x = Math.PI / 2;
-    this.ceilMesh.position.set(0, wallTop, 0);
+    this._wallCtxRegion = null;
+    this._wallCtxCell = null;
+    this.ceilMesh = this.regions.buildCeiling(grid, w, h, originX, originZ, wallTop);
     this.scene.add(this.ceilMesh);
+    {
+      const avoidLights = new Set();
+      if (this.exits) for (const ex of this.exits) avoidLights.add(`${ex.x},${ex.y}`);
+      this.regions.buildLights(grid, w, h, originX, originZ, wallTop, avoidLights);
+    }
     return {
       x: originX,
       z: originZ,
@@ -3509,6 +6160,7 @@ export class MazeGame {
     assignObstacles(this.maze, w, h, 0, 0, this.rng);
     assignDoors(this.maze, w, h, this.rng, { density });
     this.surfaceMap = generateSurfaceMap(w, h, this.rng);
+    this.regionMap = this.regions.generate(w, h, this.baseSeed, n);
     const exitCells = pickExits(this.maze, w, h, 0, 0, this.rng);
     this.exits = exitCells.map((e, i) => ({
       ...e,
@@ -3528,6 +6180,21 @@ export class MazeGame {
     
     
     clearHurdlesNearAllDoors(this.maze, w, h);
+    {
+      
+      const pockets = carveCavePockets(
+        this.maze, w, h,
+        createRng(hashSeed(`${this.baseSeed}_${n}_pockets`)),
+        {
+          forbidden: new Set(['0,0', ...this.exits.map((e) => `${e.x},${e.y}`)]),
+          count: w * h >= 200 ? 2 : 1,
+          minSize: 5,
+          maxSize: Math.max(8, Math.min(28, Math.round(w * h * 0.12))),
+        },
+      );
+      this.regions.setPockets(pockets);
+      this.regions.adjustSurfaces(this.surfaceMap);
+    }
     this._roomCells = [];
     for (let ry = 0; ry < h; ry++) {
       for (let rx = 0; rx < w; rx++) {
@@ -3561,6 +6228,21 @@ export class MazeGame {
       if (entranceWallDir) this._buildEntranceDoor(spawnX, spawnY, entranceWallDir);
     }
     this._spawnCell = [spawnX, spawnY];
+    {
+      const avoid = new Set([`${spawnX},${spawnY}`, '0,0']);
+      for (const ex of this.exits) avoid.add(`${ex.x},${ex.y}`);
+      this.regions.buildDecor({
+        grid: this.maze, w, h,
+        originX: this.mazeOrigin.x, originZ: this.mazeOrigin.z,
+        wallTop: this._wallTop,
+        avoid,
+        addCollider: (cx, cy, x, z, radius) => {
+          const key = `${cx},${cy}`;
+          if (!this._furnitureColliders.has(key)) this._furnitureColliders.set(key, []);
+          this._furnitureColliders.get(key).push({ x, z, radius });
+        },
+      });
+    }
     this._nextShiftIn = null;
     const start = this._cellCenter(spawnX, spawnY);
     this.player.x = start.x;
@@ -3809,12 +6491,17 @@ export class MazeGame {
   _computeProgress() {
     const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
     let best = 0;
+    let reachable = false;
     for (const exit of this.exits) {
       const dist = exit.distGrid[cy][cx];
+      if (dist < 0) continue; 
+      reachable = true;
       const progress = 1 - dist / exit.totalDist;
       if (progress > best) best = progress;
     }
-    return Math.max(0, Math.min(1, best));
+    if (!reachable) return this._lastProgress ?? 0;
+    this._lastProgress = Math.max(0, Math.min(1, best));
+    return this._lastProgress;
   }
   _hurdleInfoAt(cx, cy, dir) {
     const cell = this.maze[cy][cx];
@@ -3999,6 +6686,7 @@ export class MazeGame {
   }
   _tryJump() {
     if (!this.running) return;
+    if (this._forcedCrouch()) return;
     if (!this.grounded) return;
     this.verticalVelocity = JUMP_SPEED * (this.crouching ? CROUCH_JUMP_MULT : 1);
     this.grounded = false;
@@ -4009,7 +6697,7 @@ export class MazeGame {
     const groundOffset = hurdleTop !== null && hurdleTop > baseFloor ? hurdleTop - baseFloor : 0;
     if (this.grounded) {
       if (this.verticalOffset > groundOffset + 0.001) {
-        // The support that was under us (e.g. a hurdle) is no longer there: start falling.
+        
         this.grounded = false;
       } else {
         this.verticalOffset = groundOffset;
@@ -4024,8 +6712,26 @@ export class MazeGame {
       this.grounded = true;
     }
   }
+  /** true inside the claustrophobic caves (and right at their entrance holes) */
+  _forcedCrouch() {
+    const R = this.regions;
+    if (!R || !R.hasPockets() || !this.maze) return false;
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
+    if (R.isPocket(cx, cy)) return true;
+    const cell = this.maze[cy] && this.maze[cy][cx];
+    if (!cell) return false;
+    const c = this._cellCenter(cx, cy);
+    const dx = this.player.x - c.x;
+    const dz = this.player.z - c.z;
+    const near = CELL / 2 - 1.3;
+    if (cell.crawlN && R.isPocket(cx, cy - 1) && dz < -near) return true;
+    if (cell.crawlS && R.isPocket(cx, cy + 1) && dz > near) return true;
+    if (cell.crawlW && R.isPocket(cx - 1, cy) && dx < -near) return true;
+    if (cell.crawlE && R.isPocket(cx + 1, cy) && dx > near) return true;
+    return false;
+  }
   _updateStance(dt) {
-    this.crouching = this.crouchToggled || !!this.keys['KeyC'];
+    this.crouching = this.crouchToggled || !!this.keys['KeyC'] || this._forcedCrouch();
     const target = this.crouching ? CROUCH_EYE_HEIGHT : EYE_HEIGHT;
     const t = 1 - Math.exp(-dt * STANCE_EASE_RATE);
     this.currentEyeHeight += (target - this.currentEyeHeight) * t;
@@ -4372,6 +7078,7 @@ export class MazeGame {
     if (this.exits) for (const exit of this.exits) cells.push([exit.x, exit.y]);
     if (this._spawnCell) cells.push(this._spawnCell);
     if (this._roomCells) cells.push(...this._roomCells);
+    if (this.regions) cells.push(...this.regions.protectedCells());
     return cells;
   }
   _triggerMazeShift() {
@@ -4395,6 +7102,8 @@ export class MazeGame {
     if (changes.some((c) => c.flattened)) {
       this._rebuildFloor();
       this._rebuildHurdles();
+      
+      if (this.regions) this.regions.refreshDecorHeights(this.maze);
     }
     if (this.callbacks.onMazeShift) this.callbacks.onMazeShift(changes);
   }
@@ -4415,6 +7124,7 @@ export class MazeGame {
       const mesh = this._wallMeshByEdge.get(key);
       if (!mesh) return;
       this._wallMeshByEdge.delete(key);
+      if (this.regions) this.regions.onWallFall(key);
       this._wallAnims.push({
         mesh,
         kind: 'sink',
@@ -4432,6 +7142,8 @@ export class MazeGame {
       if (this._wallMeshByEdge.has(key) || !this._wallGeo || !this._wallGeoV) return;
       const { geo } = this._wallEdgeTransform(change.x, change.y, change.dir);
       const startY = this._wallBottom - this._wallSpan / 2 - 0.4;
+      this._wallCtxRegion = (this.regionMap && this.regionMap[change.y] && this.regionMap[change.y][change.x]) || null;
+      this._wallCtxCell = this._wallCtxRegion ? [change.x, change.y] : null;
       const m = new THREE.Mesh(geo, this._pickWallMaterial());
       m.position.set(px, startY, pz);
       this.scene.add(m);
@@ -4440,6 +7152,8 @@ export class MazeGame {
       const shiftAxis = change.dir === 'e' ? 'x' : 'z';
       this._maybeAddStain(m, shiftAxis);
       this._maybeAddPainting(m, shiftAxis);
+      this._wallCtxRegion = null;
+      this._wallCtxCell = null;
       this._wallAnims.push({
         mesh: m,
         kind: 'rise',
@@ -4634,6 +7348,7 @@ export class MazeGame {
     this.camera.position.set(this.player.x, this.player.y, this.player.z);
     this._updateTorch(dt);
     this._updateAtmosphere(dt);
+    if (this.regions) this.regions.update(dt, this.player);
     this._updateViewmodel(dt);
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
@@ -4654,6 +7369,7 @@ export class MazeGame {
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     this.renderer.domElement.removeEventListener('click', this._onClick);
     this._clearMazeMeshes();
+    if (this.regions) this.regions.dispose();
     if (this._mistPoints) {
       this.scene.remove(this._mistPoints);
       this._mistPoints.geometry.dispose();
