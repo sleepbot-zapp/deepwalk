@@ -49,6 +49,8 @@ export default function App() {
   const [exitToast, setExitToast] = useState(null); 
   const [doorPrompt, setDoorPrompt] = useState(null);
   const [crouchOn, setCrouchOn] = useState(false);
+  const [fade, setFade] = useState({ opacity: 0, ms: 0 });
+  const [floorInfo, setFloorInfo] = useState({ floor: 1, count: 1 });
 
   const [isTouchDevice] = useState(detectTouchDevice);
   const [portrait, setPortrait] = useState(isPortrait);
@@ -73,6 +75,8 @@ export default function App() {
       onTime: (t) => setTime(t),
       onAutoPause: () => setPaused(true),
       onDoorLookAt: (info) => setDoorPrompt(info),
+      onFade: (opacity, ms) => setFade({ opacity, ms }),
+      onFloorChange: (floor, count) => setFloorInfo({ floor, count }),
       
       
       onExitFound: (letter, info) => {
@@ -186,7 +190,12 @@ export default function App() {
           <div className="crosshair" />
           <div className="hud">
             <div className="top-bar">
-              <div className="stat">LEVEL <b>{floorLabel}</b></div>
+              <div className="stat">
+                LEVEL <b>{floorLabel}</b>
+                {floorInfo.count > 1 && (
+                  <span className="floor-tag"> &middot; FLOOR <b>{floorInfo.floor}/{floorInfo.count}</b></span>
+                )}
+              </div>
               <div className={`stat ${isTouchDevice ? 'stat-time-mobile' : ''}`}>
                 {isTouchDevice && (
                   <div className="progress-corner-mobile">
@@ -273,6 +282,10 @@ export default function App() {
         </div>
       )}
 
+      <div
+        className="floor-fade"
+        style={{ opacity: fade.opacity, transitionDuration: `${fade.ms}ms` }}
+      />
       <div className="win-flash" style={{ opacity: flash ? 1 : 0 }} />
 
       {phase === 'menu' && (

@@ -1,0 +1,35 @@
+{
+  "FURNITURE_SUPPORT": {
+    "bed": {
+      "hgt": 0.54,
+      "hx": 0.925,
+      "hz": 0.575
+    },
+    "table": {
+      "hgt": 0.74,
+      "hx": 0.575,
+      "hz": 0.375
+    },
+    "chair": {
+      "hgt": 0.45,
+      "hx": 0.21,
+      "hz": 0.21
+    },
+    "bedsideTable": {
+      "hgt": 0.55,
+      "hx": 0.25,
+      "hz": 0.2
+    },
+    "cupboard": {
+      "hgt": 1.9
+    }
+  },
+
+  "FURNITURE_COLLIDE_RADIUS": {
+    "bed": 1.0,
+    "cupboard": 0.55,
+    "bedsideTable": 0.33,
+    "table": 0.7,
+    "chair": 0.32
+  }
+}

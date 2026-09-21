@@ -21,6 +21,15 @@ import {
 } from './maze.js';
 import { AmbientAudio } from './AmbientAudio.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import data from './scenes.json' with { type: 'json' };
+import doorStylesData from './doorStyles.json' with { type: 'json' };
+
+const DOOR_STYLES = doorStylesData.DOOR_STYLES.map(style => ({
+  ...style,
+  handle: parseInt(style.handle, 16),
+}));
+const PAINTING_SCENES = data.PAINTING_SCENES;
+const CREEPY_CAPTIONS = data.CREEPY_CAPTIONS;
 const CELL = 4;
 const WALL_H = 3.4;
 const MOVE_SPEED = 5.2;
@@ -40,12 +49,13 @@ const CRAWL_OPENING_HEIGHT = 1.25;
 const CRAWL_OPENING_WIDTH = CELL * 0.55;
 const CRAWL_PASS_MIN_WIDTH = COLLIDE_RADIUS * 2 + 0.15;
 const CRAWL_PASS_MAX_WIDTH = Math.min(CRAWL_OPENING_WIDTH * 0.75, CRAWL_PASS_MIN_WIDTH + 0.6);
-const FURNITURE_COLLIDE_RADIUS = {
-  bed: 1.0,
-  cupboard: 0.55,
-  bedsideTable: 0.33,
-  table: 0.7,
-};
+import furnitureData from './furnitureSupport.json' with { type: 'json' };
+import environmentData from './environmentStyles.json' with { type: 'json' };
+
+const FURNITURE_SUPPORT = furnitureData.FURNITURE_SUPPORT;
+const FURNITURE_COLLIDE_RADIUS = furnitureData.FURNITURE_COLLIDE_RADIUS;
+
+const MAX_STAND_HEIGHT = 1.0;
 const TORCH_DOWN_TILT = 0;
 const TORCH_HEIGHT_OFFSET = 0.3;
 const TORCH_ANGLE = Math.PI / 8;
@@ -126,105 +136,16 @@ const WALL_SHIFT_STAGGER_JITTER = 0.22;
 const WALL_SHIFT_SOUND_MAX_DIST = 26;
 const WALL_SHIFT_DEBRIS_COUNT = 12;
 const WALL_SHIFT_DEBRIS_LIFE = 0.85;
-const SURFACE_TYPES = ['stone', 'grass', 'mud', 'water'];
-const STAIN_TYPES = ['blood', 'mud', 'damp'];
-const STAIN_CHANCE = 0.45;
-const WALL_STYLE_WEIGHTS = [
-  {
-    style: 'normal',
-    weight: 0.52,
-  },
-  {
-    style: 'eerie1',
-    weight: 0.13,
-  },
-  {
-    style: 'eerie2',
-    weight: 0.13,
-  },
-  {
-    style: 'cracked',
-    weight: 0.13,
-  },
-  {
-    style: 'stained',
-    weight: 0.09,
-  },
-];
+const {
+  SURFACE_TYPES,
+  STAIN_TYPES,
+  STAIN_CHANCE,
+  WALL_STYLE_WEIGHTS,
+} = environmentData;
 const PAINTING_CHANCE = 0.09;
 const PAINTING_MAX_PER_MAZE_BASE = 5;
 const PAINTING_MAX_PER_MAZE_PER_CELL = 0.018;
-const PAINTING_SCENES = [
-  'tall_figure',
-  'crouched_figure',
-  'antler_figure',
-  'hollow_eye',
-  'hallway',
-  'moon_figure',
-  'hooded_figure',
-  'smiley_face',
-  'symbol',
-  'tally_marks',
-  'handprints',
-  'spiral',
-  'mask',
-  'door_ajar',
-  'staircase',
-  'teeth',
-  'family_wrong',
-  'cracked_mirror',
-  'watching_window',
-  'screaming_mouth',
-];
-const CREEPY_CAPTIONS = [
-  'IT WAITS WHERE YOU DO NOT LOOK.',
-  'DO YOU SEE WHAT I SEE?',
-  'NOT ALL DOORS SHOULD BE OPENED.',
-  'I AM NOT SUPPOSED TO BE HERE',
-  'HE WATCHES WHEN YOU SLEEP',
-  "DON'T GO DOWN THERE.",
-  'FOLLOW ME',
-  "I'M STILL HERE",
-  'I SEE YOU',
-  'HELP ME',
-  'DO NOT LOOK BEHIND YOU.',
-  'STAY ON THE PATH.',
-  'TURN BACK NOW.',
-  'KEEP THE LIGHT ON.',
-  "DON'T TRUST THE MIRRORS.",
-  'DAY 47. STILL NO WAY OUT.',
-  'THE WALLS MOVED AGAIN.',
-  'THERE ARE ALWAYS MORE DOORS.',
-  'SOMETHING IS UNDER THE FLOOR.',
-  "MOMMY SAYS HE ISN'T REAL.",
-  'WE USED TO PLAY HERE.',
-  'THIS WAS MY ROOM.',
-  'PLEASE LET ME OUT.',
-  'IS ANYONE THERE?',
-  'THE HALLWAY REMEMBERS.',
-  'IT WEARS DIFFERENT FACES.',
-  'EVERY EXIT LEADS BACK HERE.',
-  'THE LIGHT ATTRACTS IT.',
-  'YOU ARE NOT ALONE HERE.',
-  'SEVEN STEPS. NEVER EIGHT.',
-  'DO NOT COUNT THE DOORS.',
-  'IT KNOWS YOUR NAME.',
-  'WHO LEFT THE LIGHTS ON?',
-  'I HEARD IT BREATHING.',
-  'NO ONE ELSE REMEMBERS THIS PLACE.',
-  'IT ONLY MOVES WHEN YOU BLINK.',
-  'YOU HAVE BEEN HERE BEFORE.',
-  'THE GLASS SHOWS WHAT ISN\'T THERE.',
-  'IT COUNTS YOUR FOOTSTEPS.',
-  'SOMEONE ELSE IS BREATHING.',
-  'THE PICTURES CHANGE WHEN YOU LEAVE.',
-  'DO NOT ANSWER IF IT KNOCKS TWICE.',
-  'I DREW THIS FROM MEMORY.',
-  'IT LEARNED TO WEAR MY FACE.',
-  'THE FLOOR REMEMBERS WHO FELL.',
-  'STILL COUNTING THE DOORS.',
-  'IT SLEEPS BEHIND YOUR EYES.',
-];
+
 function makeStoneCanvas() {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
@@ -1545,43 +1466,7 @@ function makeDoorPanelCanvas(rng = Math.random, opts = {}) {
   }
   return c;
 }
-const DOOR_STYLES = [
-  { key: 'darkOak', base: '#2c2016', grain: [40, 26, 14], handle: 0x2b2b2e },
-  { key: 'ashGrey', base: '#3a3934', grain: [48, 48, 44], handle: 0x55524a },
-  {
-    key: 'crimsonFaded',
-    base: '#40232a',
-    grain: [46, 22, 24],
-    ornate: true,
-    handle: 0x6b5a3a,
-  },
-  {
-    key: 'spruceDusty',
-    base: '#31352a',
-    grain: [38, 40, 30],
-    pane: 'diamond',
-    paneColor: 'rgba(140,150,132,0.22)',
-    handle: 0x3a3a3e,
-  },
-  {
-    key: 'birchPale',
-    base: '#5e5140',
-    grain: [72, 63, 50],
-    pane: 'small',
-    paneColor: 'rgba(175,182,178,0.26)',
-    handle: 0xa89d7c,
-  },
-  { key: 'charred', base: '#181410', grain: [28, 22, 16], handle: 0x1c1c1e },
-  {
-    key: 'ironGrey',
-    base: '#3a3b3e',
-    grain: [50, 52, 56],
-    pane: 'cross',
-    paneColor: 'rgba(100,110,120,0.22)',
-    handle: 0x8a8f96,
-    metal: true,
-  },
-];
+
 function makeHurdleWoodCanvas(rng = Math.random, opts = {}) {
   const c = document.createElement('canvas');
   c.width = 256;
@@ -1947,7 +1832,6 @@ const cap = (d) => d.toUpperCase();
 
 const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
-/* ------------------------------ canvases --------------------------- */
 
 function mkCanvas(w, h) {
   const c = document.createElement('canvas');
@@ -2189,7 +2073,6 @@ function makeRugCanvas(rng) {
   speckle(ctx, 128, 80, rng, 300, 60, 200, 0.12);
   return c;
 }
-/* ---- library ---- */
 function makeLibraryWallCanvas(rng, dirty) {
   const [c, ctx] = mkCanvas(256, 256);
   ctx.fillStyle = '#4b2c27';
@@ -2296,7 +2179,6 @@ function makeLibraryCeilingCanvas(rng) {
   return c;
 }
 
-/* ---- poolrooms ---- */
 function makePoolWallCanvas(rng, dirty) {
   const [c, ctx] = mkCanvas(256, 256);
   for (let ty = 0; ty < 16; ty++) {
@@ -2382,7 +2264,6 @@ function makePoolCeilingCanvas(rng) {
   return c;
 }
 
-/* ---- sewer ---- */
 function makeSewerWallCanvas(rng, dark) {
   const [c, ctx] = mkCanvas(256, 256);
   ctx.fillStyle = dark ? '#111210' : '#1a1b16'; 
@@ -2435,7 +2316,6 @@ function makeSewerFloorCanvas(rng) {
   return c;
 }
 
-/* ---- crypt ---- */
 function makeCryptWallCanvas(rng, dark) {
   const [c, ctx] = mkCanvas(256, 256);
   ctx.fillStyle = '#110f0d'; 
@@ -2538,35 +2418,61 @@ function makeWebCanvas() {
   return c;
 }
 
-/* ------------------------- instancing helper ----------------------- */
-
-/**
- * Organic stalagmite/stalactite: unit height, base radius 1, base at y=-0.5, tip at y=+0.5
- * (same footprint as the old cone, so scale/rotation settings keep working).
- * Concave taper, flared base, lumpy ridges and a slight bend; a few seeded variants.
- */
-function makeStalagGeometry(seed) {
-  const RINGS = 10;
-  const SEG = 9;
-  const hash = (i) => {
-    const s = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
-    return s - Math.floor(s);
+function makeFormationGeometry(seed, kind) {
+  const RINGS = 14;
+  const SEG = 10;
+  const kindSalt = kind === 'spire' ? 1 : kind === 'tusk' ? 2 : kind === 'stump' ? 3 : 4;
+  const hash = (a, b = 0, c = 0) => {
+    const v = Math.sin(a * 127.1 + b * 311.7 + c * 74.7 + seed * 19.19 + kindSalt * 3.3) * 43758.5453;
+    return v - Math.floor(v);
   };
-  const bendX = (hash(1) - 0.5) * 0.3;
-  const bendZ = (hash(2) - 0.5) * 0.3;
+  const isColumn = kind === 'column';
+  const p = kind === 'spire' ? 1.35 + hash(1) : kind === 'tusk' ? 1.0 + hash(1) * 0.5 : kind === 'stump' ? 0.5 + hash(1) * 0.45 : 1;
+  const bend = kind === 'spire' ? 0.6 + hash(2) * 1.8 : kind === 'tusk' ? 2 + hash(2) * 2.4 : kind === 'stump' ? 0.2 + hash(2) * 0.5 : 0;
+  const bendAng = hash(3) * Math.PI * 2;
+  const ovalA = 0.72 + hash(4) * 0.6;
+  const ovalB = 0.72 + hash(5) * 0.6;
+  const ovalRot = hash(6) * Math.PI;
+  const lobe2 = 0.1 + hash(7) * 0.16;
+  const lobe3 = 0.06 + hash(8) * 0.14;
+  const ph2 = hash(9) * 6.283;
+  const ph3 = hash(10) * 6.283;
+  const nodAt = [0.12 + hash(11) * 0.4, 0.3 + hash(12) * 0.4];
+  const nodAmp = [0.18 + hash(13) * 0.3, 0.12 + hash(14) * 0.25];
+  const tipR = kind === 'stump' ? 0.34 + hash(15) * 0.22 : 0;
+  const ledgeFreq = 9 + hash(17) * 8;
   const pos = [];
   for (let r = 0; r <= RINGS; r++) {
     const t = r / RINGS;
-    let rad = Math.pow(1 - t, 1.7); 
-    rad *= 1 + Math.max(0, 0.22 - t) * 3.2; 
-    rad *= 1 + (hash(50 + r) - 0.5) * 0.25 * (1 - t); 
-    const y = t - 0.5;
-    const cx = bendX * t * t;
-    const cz = bendZ * t * t;
+    let rad;
+    if (isColumn) {
+      const u = Math.abs(t - 0.5) * 2;
+      rad = 0.42 + 0.9 * Math.pow(u, 2.3);
+    } else {
+      rad = tipR + (1 - tipR) * Math.pow(1 - t, p);
+      rad *= 1 + 0.16 * Math.exp(-t * 9) * (0.5 + hash(16)); 
+      if (kind === 'stump') rad *= 1 + 0.1 * Math.sin(t * ledgeFreq); 
+    }
+    for (let i = 0; i < 2; i++) {
+      rad *= 1 + nodAmp[i] * Math.exp(-Math.pow((t - nodAt[i]) / 0.07, 2)) * (isColumn ? 0.6 : 1);
+    }
+    const off = bend * Math.pow(t, 1.6);
+    const cx = Math.cos(bendAng) * off + (isColumn ? Math.sin(t * 6 + seed) * 0.06 : 0);
+    const cz = Math.sin(bendAng) * off + (isColumn ? Math.cos(t * 5 + seed) * 0.06 : 0);
+    let y = t - 0.5;
+    if (r > 0 && r < RINGS) y += (hash(20, r) - 0.5) * 0.02;
     for (let s = 0; s < SEG; s++) {
       const a = (s / SEG) * Math.PI * 2;
-      const ridge = 1 + 0.14 * Math.sin(a * 3 + seed * 2) + (hash(r * 31 + s) - 0.5) * 0.32 * (1 - t * 0.6);
-      pos.push(cx + Math.cos(a) * rad * ridge, y, cz + Math.sin(a) * rad * ridge);
+      const ex = Math.cos(a) * ovalA;
+      const ez = Math.sin(a) * ovalB;
+      const px = ex * Math.cos(ovalRot) - ez * Math.sin(ovalRot);
+      const pz = ex * Math.sin(ovalRot) + ez * Math.cos(ovalRot);
+      const lobes =
+        1 + lobe2 * Math.sin(2 * a + ph2 + t * 2) + lobe3 * Math.sin(3 * a + ph3) +
+        (hash(r, s, 1) - 0.5) * 0.28 * (1 - t * 0.5);
+      let vy = y;
+      if (r === RINGS && kind === 'stump') vy += (hash(r, s, 2) - 0.5) * 0.09; 
+      pos.push(cx + px * rad * lobes, vy, cz + pz * rad * lobes);
     }
   }
   const idx = [];
@@ -2580,16 +2486,52 @@ function makeStalagGeometry(seed) {
       idx.push(a, b, a1, a1, b, b1);
     }
   }
-  
-  const baseCenter = pos.length / 3;
-  pos.push(0, -0.5, 0);
-  for (let s = 0; s < SEG; s++) idx.push(baseCenter, s, (s + 1) % SEG);
+  const bottom = pos.length / 3;
+  pos.push(pos[0] * 0 + (pos[0] + pos[3 * (SEG >> 1)]) / 2, -0.5, (pos[2] + pos[3 * (SEG >> 1) + 2]) / 2);
+  for (let s = 0; s < SEG; s++) idx.push(bottom, s, (s + 1) % SEG);
+  if (tipR > 0 || isColumn) {
+    const last = RINGS * SEG;
+    let mx = 0;
+    let mz = 0;
+    for (let s = 0; s < SEG; s++) {
+      mx += pos[3 * (last + s)] / SEG;
+      mz += pos[3 * (last + s) + 2] / SEG;
+    }
+    const top = pos.length / 3;
+    pos.push(mx, 0.5 + (kind === 'stump' ? 0.02 : 0), mz);
+    for (let s = 0; s < SEG; s++) idx.push(top, last + ((s + 1) % SEG), last + s);
+  }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
 }
+
+function makeBoulderGeometry(seed) {
+  const g = new THREE.IcosahedronGeometry(1, 1);
+  const pos = g.attributes.position;
+  const frac = (v) => v - Math.floor(v);
+  const noise = (x, y, z) =>
+    frac(Math.sin(Math.round(x * 50) * 12.9898 + Math.round(y * 50) * 78.233 + Math.round(z * 50) * 37.719 + seed * 4.1) * 43758.5453);
+  const ax = 0.8 + frac(Math.sin(seed * 91.7) * 9999) * 0.5;
+  const az = 0.8 + frac(Math.sin(seed * 33.1) * 9999) * 0.5;
+  for (let i = 0; i < pos.count; i++) {
+    let x = pos.getX(i);
+    let y = pos.getY(i);
+    let z = pos.getZ(i);
+    const r = 1 + (noise(x, y, z) - 0.5) * 0.5 + 0.16 * Math.sin(x * 3.1 + seed) * Math.cos(z * 2.7 - seed);
+    x *= r * ax;
+    y *= r * 0.85;
+    z *= r * az;
+    if (y < -0.4) y = -0.4 + (y + 0.4) * 0.15;
+    pos.setXYZ(i, x, y, z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+const FORMATION_VARIANTS = { spire: 6, tusk: 4, stump: 4, column: 3, boulder: 6 };
 
 class Batch {
   constructor(manager, group) {
@@ -2600,7 +2542,10 @@ class Batch {
     this.cur = null;
   }
   add(geoKey, matKey, x, y, z, o = {}) {
-    if (geoKey === 'stalag') geoKey = `stalag${Math.floor(Math.abs(x * 12.9898 + z * 78.233)) % 4}`;
+    if (geoKey === 'stalag') geoKey = 'spire'; 
+    if (FORMATION_VARIANTS[geoKey]) {
+      geoKey = `${geoKey}${Math.floor(Math.abs(x * 12.9898 + z * 78.233 + (o.sy || 0) * 31.7)) % FORMATION_VARIANTS[geoKey]}`;
+    }
     const key = `${geoKey}|${matKey}`;
     let b = this.map.get(key);
     if (!b) {
@@ -2649,10 +2594,7 @@ class Batch {
       this.group.add(mesh);
     }
   }
-  /**
-   * Re-seats every floor-bound item on the current floor. Maze shifts can flatten cells
-   * (their elevation changes), and without this the decor would be left hovering in mid-air.
-   */
+
   refreshHeights(floorOf) {
     const m4 = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -2699,7 +2641,6 @@ class Batch {
   }
 }
 
-/* ------------------------------ manager ---------------------------- */
 
 class RegionManager {
   constructor({ scene, CELL, STEP_HEIGHT, edgeKey, onRegionChange }) {
@@ -2728,12 +2669,13 @@ class RegionManager {
     this._fogTarget = new THREE.Color(REGION_FOG.house);
   }
 
-  /* ---- shared resources ---- */
   geo(key) {
     if (this._geos[key]) return this._geos[key];
     let g;
-    if (/^stalag\d$/.test(key)) {
-      this._geos[key] = makeStalagGeometry(Number(key.slice(6)) + 1);
+    const formation = /^(spire|tusk|stump|column|boulder)(\d+)$/.exec(key);
+    if (formation) {
+      const variant = Number(formation[2]) + 1;
+      this._geos[key] = formation[1] === 'boulder' ? makeBoulderGeometry(variant) : makeFormationGeometry(variant, formation[1]);
       return this._geos[key];
     }
     switch (key) {
@@ -2828,7 +2770,6 @@ class RegionManager {
     });
   }
 
-  /* ---- wall / floor / ceiling materials ---- */
   wallMaterial(region, rng) {
     if (region === 'house' || !(REGION_WEIGHTS[region] || region === 'deepcave')) return null;
     let set = this._wallSets[region];
@@ -2950,7 +2891,6 @@ class RegionManager {
     return m;
   }
 
-  /* ---- region map ---- */
   generate(w, h, baseSeed, level) {
     this._w = w;
     this._h = h;
@@ -2958,6 +2898,7 @@ class RegionManager {
     this._level = level;
     this._pockets = null;
     this._pocketSet = new Set();
+    this._ceilHoles = new Set();
     const rng = createRng(hashSeed(`${baseSeed}_${level}_regions`));
     
     const count = Math.max(3, Math.min(7, Math.round((w * h) / 90)));
@@ -3110,7 +3051,6 @@ class RegionManager {
     this.regionMap = map;
     return map;
   }
-  /** region whose look applies to `channel` in this cell (blends near borders) */
   visual(x, y, channel) {
     const own = this.regionMap[y][x];
     const b = this._blend;
@@ -3124,7 +3064,6 @@ class RegionManager {
     const p = b.p[y][x];
     return p > 0 && rng() < p ? b.other[y][x] : own;
   }
-  /** register the sealed claustrophobic caves ({cells:[[x,y]], entrances:[...]}) */
   setPockets(pockets) {
     this._pockets = pockets && pockets.cells.length ? pockets : null;
     this._pocketSet = new Set();
@@ -3177,7 +3116,10 @@ class RegionManager {
     return this.regionMap[cy][cx];
   }
 
-  /* ---- ceiling ---- */
+
+  setCeilingHoles(keys) {
+    this._ceilHoles = new Set(keys);
+  }
   buildCeiling(grid, w, h, originX, originZ, wallTop) {
     this._origin = { x: originX, z: originZ };
     const group = new THREE.Group();
@@ -3185,6 +3127,7 @@ class RegionManager {
     const low = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
+        if (this._ceilHoles && this._ceilHoles.has(`${x},${y}`)) continue;
         if (this.regionMap[y][x] === 'deepcave') low.push([x, y]);
         else (cells[this.visual(x, y, 'ceil')] ||= []).push([x, y]);
       }
@@ -3213,7 +3156,6 @@ class RegionManager {
     return group;
   }
 
-  /* ---- lights ---- */
   buildLights(grid, w, h, originX, originZ, wallTop, avoid) {
     this._disposeLights();
     const rng = createRng(hashSeed(`${this._baseSeed}_${this._level}_lamps`));
@@ -3507,7 +3449,6 @@ class RegionManager {
     if (this._decor) this._decor.batch.hideEdge(key);
   }
 
-  /* ---- decor ---- */
   buildDecor({ grid, w, h, originX, originZ, wallTop, avoid, addCollider }) {
     this._disposeDecor();
     const rng = createRng(hashSeed(`${this._baseSeed}_${this._level}_decor`));
@@ -3559,7 +3500,7 @@ class RegionManager {
         const anyCrawl = cell.crawlN || cell.crawlS || cell.crawlE || cell.crawlW;
         const free = !cell.rampDir && !cell.hurdleDir && !anyDoor && !anyCrawl && !(avoid && avoid.has(`${x},${y}`));
         const usable = DIR_KEYS.filter((d) => this._wallUsable(cell, d));
-        const collide = (px, pz, r) => addCollider && addCollider(x, y, px, pz, r);
+        const collide = (px, pz, r, o) => addCollider && addCollider(x, y, px, pz, r, o);
         batch.cur = { x, y, floorY };
 
         
@@ -3585,29 +3526,56 @@ class RegionManager {
           });
         };
 
-        /* ------------ CLAUSTROPHOBIC CAVE ------------ */
+        
+        const SINK = 0.14; 
+        const boulderY = (sy) => floorY + sy * 0.4 - 0.03;
+        const mound = (px, pz, mr) => {
+          const sy = mr * rnd(0.3, 0.5);
+          batch.add('boulder', 'rock', px + rnd(-0.05, 0.05), boulderY(sy), pz + rnd(-0.05, 0.05), {
+            sx: mr, sy, sz: mr * rnd(0.8, 1.2), ry: rng() * 6.28,
+          });
+        };
+        const stalagmite = (px, pz, r, hgt, kind) => {
+          batch.add(kind, 'rock', px, floorY + hgt / 2 - hgt * SINK, pz, {
+            sx: r, sy: hgt, sz: r * rnd(0.8, 1.25), ry: rng() * 6.28, rx: rnd(-0.1, 0.1), rz: rnd(-0.1, 0.1),
+          });
+        };
+        
+        const stalagmiteCluster = (px, pz, scale, block) => {
+          const r = rnd(0.13, 0.32) * scale;
+          const hgt = rnd(0.6, 1.9) * scale;
+          stalagmite(px, pz, r, hgt, pick(['spire', 'spire', 'spire', 'tusk', 'stump']));
+          const sat = Math.floor(rng() * 4);
+          for (let i = 0; i < sat; i++) {
+            const a = rng() * 6.28;
+            const d = r * rnd(0.9, 1.9);
+            stalagmite(px + Math.cos(a) * d, pz + Math.sin(a) * d, r * rnd(0.3, 0.7), hgt * rnd(0.2, 0.6), pick(['spire', 'tusk']));
+          }
+          if (rng() < 0.7) mound(px, pz, r * rnd(1.5, 2.3));
+          if (block && r > 0.2) collide(px, pz, r * 0.95);
+        };
+        const stalactite = (px, pz, ceilY, r, hgt, kind, matKey, anchorTop) => {
+          batch.add(kind, matKey, px, ceilY - hgt / 2 + hgt * SINK, pz, {
+            sx: r, sy: hgt, sz: r * rnd(0.8, 1.25), rx: Math.PI + rnd(-0.1, 0.1), ry: rng() * 6.28, rz: rnd(-0.1, 0.1),
+            ...(anchorTop ? { anchor: 'top' } : {}),
+          });
+        };
+
         if (region === 'deepcave') {
           const ceilY = floorY + CAVE_CEIL;
           const nTites = 3 + Math.floor(rng() * 5);
           for (let i = 0; i < nTites; i++) {
-            const r = rnd(0.05, 0.16);
-            const hgt = rnd(0.15, 0.38);
-            batch.add('stalag', 'rock', cx + rnd(-1.8, 1.8), ceilY - hgt / 2 + 0.02, cz + rnd(-1.8, 1.8), {
-              sx: r, sy: hgt, sz: r, rx: Math.PI, ry: rng() * 3,
-            });
+            stalactite(cx + rnd(-1.8, 1.8), cz + rnd(-1.8, 1.8), ceilY, rnd(0.05, 0.16), rnd(0.15, 0.38), pick(['spire', 'tusk']), 'rock', false);
           }
           if (free && rng() < 0.4) {
             const [px, pz] = ringPoint(0.9, 1.7);
-            const r = rnd(0.1, 0.26);
-            const hgt = rnd(0.2, 0.6);
-            batch.add('stalag', 'rock', px, floorY + hgt / 2 - 0.02, pz, { sx: r, sy: hgt, sz: r, ry: rng() * 3 });
-            if (r > 0.16) collide(px, pz, r * 0.9);
+            stalagmiteCluster(px, pz, 0.45, true);
           }
           if (free && rng() < 0.35) {
             const [px, pz] = ringPoint(0.5, 1.6);
             const sx = rnd(0.3, 0.55);
             const sy = rnd(0.2, 0.4);
-            batch.add('ico', 'rock', px, floorY + sy * 0.55, pz, { sx, sy, sz: rnd(0.3, 0.55), rx: rng(), ry: rng() * 3, rz: rng() });
+            batch.add('boulder', 'rock', px, boulderY(sy), pz, { sx, sy, sz: rnd(0.3, 0.55), ry: rng() * 6.28 });
             collide(px, pz, sx * 0.9);
           }
           if (rng() < 0.12) {
@@ -3633,7 +3601,6 @@ class RegionManager {
           }
         }
 
-        /* ---------------- HOUSE ---------------- */
         if (region === 'house') {
           if (isRoom && free && rng() < 0.55) {
             const [dx, dz] = [rnd(-0.3, 0.3), rnd(-0.3, 0.3)];
@@ -3674,7 +3641,6 @@ class RegionManager {
           }
         }
 
-        /* ---------------- OFFICE ---------------- */
         if (region === 'office') {
           if (free && rng() < (isRoom ? 0.5 : 0.11)) {
             const yaw = pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]) + rnd(-0.12, 0.12);
@@ -3700,7 +3666,8 @@ class RegionManager {
             part('box', 'chair', cb, 0, 0.78, 0.22, { sx: 0.45, sy: 0.5, sz: 0.05 });
             part('cyl', 'dark', cb, 0, 0.25, 0, { sx: 0.035, sy: 0.4, sz: 0.035 });
             part('cyl', 'dark', cb, 0, 0.03, 0, { sx: 0.24, sy: 0.04, sz: 0.24 });
-            collide(base.x, base.z, 0.72);
+            collide(cb.x, cb.z, 0.28, { hgt: 0.51, hx: 0.225, hz: 0.225, yaw: cb.yaw });
+            collide(base.x, base.z, 0.72, { hgt: 0.77, hx: 0.7, hz: 0.35, yaw: base.yaw });
           } else if (free && usable.length && rng() < 0.11) {
             const d = pick(usable);
             const ns = DIRS[d].ix === 0;
@@ -3738,29 +3705,29 @@ class RegionManager {
           }
         }
 
-        /* ---------------- CAVE ---------------- */
         if (region === 'cave') {
           if (!cell.rampDir && !cell.hurdleDir) {
             if (rng() < 0.35) {
               const n = 1 + Math.floor(rng() * 2);
               for (let i = 0; i < n; i++) {
-                const [px, pz] = ringPoint(1.15, 1.7);
-                const r = rnd(0.12, 0.34);
-                const hgt = rnd(0.5, 1.6);
-                batch.add('stalag', 'rock', px, floorY + hgt / 2 - 0.02, pz, {
-                  sx: r, sy: hgt, sz: r, rx: rnd(-0.08, 0.08), rz: rnd(-0.08, 0.08), ry: rng() * 3,
-                });
-                if (free && r > 0.2) collide(px, pz, r * 0.85);
+                const [px, pz] = ringPoint(1.1, 1.7);
+                stalagmiteCluster(px, pz, rnd(0.8, 1.25), free);
               }
             }
             if (rng() < 0.18) {
               const [px, pz] = ringPoint(0.9, 1.7);
               const sx = rnd(0.3, 0.7);
               const sy = rnd(0.25, 0.55);
-              batch.add('ico', 'rock', px, floorY + sy * 0.55, pz, {
-                sx, sy, sz: rnd(0.3, 0.7), rx: rng(), ry: rng() * 3, rz: rng(),
-              });
+              batch.add('boulder', 'rock', px, boulderY(sy), pz, { sx, sy, sz: rnd(0.3, 0.7), ry: rng() * 6.28 });
               if (free && sx > 0.4) collide(px, pz, sx * 0.85);
+            }
+            if (free && rng() < 0.05) {
+              
+              const [px, pz] = ringPoint(0.7, 1.5);
+              const hh = wallTop - floorY;
+              const r = rnd(0.16, 0.26);
+              batch.add('column', 'rock', px, floorY + hh / 2, pz, { sx: r, sy: hh, sz: r * rnd(0.85, 1.2), ry: rng() * 6.28, anchor: 'span', top: wallTop });
+              collide(px, pz, r * 1.2);
             }
             if (rng() < (isRoom ? 0.3 : 0.07)) {
               const [px, pz] = ringPoint(0.6, 1.6);
@@ -3779,16 +3746,14 @@ class RegionManager {
           if (rng() < 0.4) {
             const n = 2 + Math.floor(rng() * 4);
             for (let i = 0; i < n; i++) {
-              const r = rnd(0.07, 0.25);
-              const hgt = rnd(0.3, 1.4);
-              batch.add('stalag', 'rock', cx + rnd(-1.7, 1.7), wallTop - hgt / 2 + 0.02, cz + rnd(-1.7, 1.7), {
-                sx: r, sy: hgt, sz: r, rx: Math.PI, ry: rng() * 3, anchor: 'top',
-              });
+              const tx = cx + rnd(-1.7, 1.7);
+              const tz = cz + rnd(-1.7, 1.7);
+              stalactite(tx, tz, wallTop, rnd(0.08, 0.26), rnd(0.3, 1.5), pick(['spire', 'spire', 'tusk']), 'rock', true);
+              if (rng() < 0.3) stalactite(tx + rnd(-0.3, 0.3), tz + rnd(-0.3, 0.3), wallTop, rnd(0.03, 0.06), rnd(0.4, 1.1), 'spire', 'rock', true); 
             }
           }
         }
 
-        /* ------------- MAINTENANCE -------------- */
         if (region === 'maintenance') {
           
           for (const d of usable) {
@@ -3831,14 +3796,15 @@ class RegionManager {
               sx: 0.28, sy: 0.85, sz: 0.28, color: pick([0x6e3b26, 0x2f4a5c, 0x3a5a3a, 0x7a6a30]),
             });
             batch.add('cyl', 'dark', px, floorY + 0.86, pz, { sx: 0.24, sy: 0.03, sz: 0.24 });
-            collide(px, pz, 0.32);
+            collide(px, pz, 0.32, { hgt: 0.88 });
           } else if (free && rng() < (isRoom ? 0.3 : 0.08)) {
             const [px, pz] = ringPoint(0.8, 1.5);
             const yaw = rng() * Math.PI;
             const sz = rnd(0.6, 0.85);
             batch.add('box', 'crate', px, floorY + sz / 2, pz, { sx: sz, sy: sz, sz, ry: yaw });
-            if (rng() < 0.4) batch.add('box', 'crate', px, floorY + sz + 0.2, pz, { sx: 0.5, sy: 0.4, sz: 0.5, ry: yaw + 0.4 });
-            collide(px, pz, sz * 0.72);
+            const stacked = rng() < 0.4;
+            if (stacked) batch.add('box', 'crate', px, floorY + sz + 0.2, pz, { sx: 0.5, sy: 0.4, sz: 0.5, ry: yaw + 0.4 });
+            collide(px, pz, sz * 0.72, stacked ? undefined : { hgt: sz, hx: sz / 2, hz: sz / 2, yaw });
           }
           if (usable.length && rng() < 0.06) {
             const d = pick(usable);
@@ -3855,7 +3821,6 @@ class RegionManager {
           }
         }
 
-        /* ---------------- LIBRARY ---------------- */
         if (region === 'library') {
           const BOOKS = [0x5a2a22, 0x2f3a2c, 0x2a2f4a, 0x4a3a22, 0x3a2a3a, 0x6a5a3a, 0x22302f, 0x502222];
           const bookColor = () => new THREE.Color(pick(BOOKS)).multiplyScalar(rnd(0.7, 1.25));
@@ -3924,7 +3889,8 @@ class RegionManager {
             for (const [lx, lz] of [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]]) {
               part('box', 'woodDark', cb, lx, 0.215, lz, { sx: 0.04, sy: 0.43, sz: 0.04 });
             }
-            collide(base.x, base.z, 0.75);
+            collide(cb.x, cb.z, 0.3, { hgt: 0.47, hx: 0.21, hz: 0.21, yaw: cb.yaw });
+            collide(base.x, base.z, 0.75, { hgt: 0.77, hx: 0.75, hz: 0.4, yaw: base.yaw });
           }
           if (free && rng() < 0.16) {
             
@@ -3945,7 +3911,6 @@ class RegionManager {
           cornerWebs(x, y, cx, cz, usable, anyDoor, 0.16);
         }
 
-        /* ---------------- POOLROOMS ---------------- */
         if (region === 'pool') {
           if (free && rng() < (isRoom ? 0.3 : 0.07)) {
             
@@ -3961,7 +3926,7 @@ class RegionManager {
             const base = { x: px, y: floorY, z: pz, yaw: pick([0, Math.PI / 2]) };
             part('box', 'tile', base, 0, 0.42, 0, { sx: 1.3, sy: 0.08, sz: 0.4 });
             for (const s of [-0.5, 0.5]) part('box', 'metalGrey', base, s, 0.19, 0, { sx: 0.06, sy: 0.38, sz: 0.36 });
-            collide(px, pz, 0.6);
+            collide(px, pz, 0.6, { hgt: 0.46, hx: 0.65, hz: 0.2, yaw: base.yaw });
           } else if (free && rng() < 0.05) {
             
             const [px, pz] = ringPoint(0.5, 1.6);
@@ -4001,7 +3966,6 @@ class RegionManager {
           }
         }
 
-        /* ---------------- SEWER ---------------- */
         if (region === 'sewer') {
           
           for (const d of usable) {
@@ -4062,7 +4026,6 @@ class RegionManager {
           }
         }
 
-        /* ---------------- CRYPT ---------------- */
         if (region === 'crypt') {
           if (free && rng() < (isRoom ? 0.35 : 0.08)) {
             
@@ -4073,10 +4036,7 @@ class RegionManager {
             part('box', 'stone', base, ajar ? 0.3 : 0, 0.66, ajar ? 0.08 : 0, { sx: 2.0, sy: 0.12, sz: 0.95, ry: ajar ? rnd(0.08, 0.2) : 0 });
             part('box', 'bone', base, ajar ? 0.4 : 0.1, 0.73, ajar ? 0.08 : 0, { sx: 0.5, sy: 0.02, sz: 0.06 });
             part('box', 'bone', base, ajar ? 0.3 : 0, 0.73, ajar ? 0.08 : 0, { sx: 0.06, sy: 0.02, sz: 0.4 });
-            for (const s of [-0.55, 0.55]) {
-              const [wx, wz] = rot(s, 0, yaw);
-              collide(base.x + wx, base.z + wz, 0.7);
-            }
+            collide(base.x, base.z, 1.05, { hgt: 0.72, hx: 1.0, hz: 0.475, yaw });
           } else if (free && rng() < (isRoom ? 0.3 : 0.1)) {
             
             const [px, pz] = ringPoint(0.7, 1.6);
@@ -4166,11 +4126,12 @@ class RegionManager {
             const along = rnd(-1.3, 1.3);
             const off = side * rnd(0.28, 0.6);
             const size = rnd(0.06, 0.2);
-            batch.add('ico', 'rock',
+            const rubbleH = size * rnd(0.6, 1);
+            batch.add('boulder', 'rock',
               wx + D.ex * off + (D.ex === 0 ? along : 0),
-              floorY + size * 0.5,
+              floorY + rubbleH * 0.4 - 0.02,
               wz + D.ez * off + (D.ez === 0 ? along : 0),
-              { sx: size, sy: size * rnd(0.6, 1), sz: size, rx: rng(), ry: rng() * 3, rz: rng() });
+              { sx: size, sy: rubbleH, sz: size, ry: rng() * 6.28 });
           }
         }
       }
@@ -4207,7 +4168,6 @@ class RegionManager {
     this.scene.add(group);
     this._decor = { group, batch };
   }
-  /** keep all floor decor (props, rocks, crystal glows) sitting on the floor after cell elevations change */
   refreshDecorHeights(grid) {
     if (!this._decor || !grid) return;
     const floorOf = (x, y) => ((grid[y] && grid[y][x] && grid[y][x].elevation) || 0) * this.STEP;
@@ -4237,7 +4197,6 @@ class RegionManager {
     this._decor = null;
   }
 
-  /* ---- per-frame ---- */
   update(dt, player) {
     
     const region = this.regionAt(player.x, player.z);
@@ -4355,7 +4314,6 @@ class RegionManager {
     }
   }
 
-  /* ---- teardown ---- */
   clear() {
     this._disposeLights();
     this._disposeDecor();
@@ -4387,11 +4345,6 @@ class RegionManager {
   }
 }
 
-/**
- * Seals off dead-end branches of the maze and turns them into claustrophobic caves.
- * A branch qualifies when it hangs off the rest of the maze by a single passage (a bridge).
- * That passage becomes a wall with a crawl hole, so the cave can only be entered by crawling.
- */
 function carveCavePockets(grid, w, h, rng, { forbidden, count, minSize, maxSize }) {
   const DELTA = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
   const OPP = { n: 's', s: 'n', e: 'w', w: 'e' };
@@ -4502,6 +4455,110 @@ function carveCavePockets(grid, w, h, rng, { forbidden, count, minSize, maxSize 
     }
   }
   return { cells, entrances };
+}
+
+const STAIR_RISE_DEFAULT = 2.2; 
+const STAIR_A0 = 0.8; 
+const STAIR_A1 = 3.6; 
+const STAIR_STEP_RISE = 0.21; 
+const STAIR_TRIGGER = 0.93; 
+const STAIR_SWAP_FRAMES = 2; 
+
+
+const STAIR_UP_MIN_RISE = 1.35;
+const STAIR_UP_MAX_RISE = 2.4;
+const STAIR_UP_HEADROOM = 2.05; 
+const STAIR_LID_T = 0.3; 
+const STAIR_STUB_H = 2.5; 
+const STAIR_DOWN_MIN_RISE = 2.2;
+const STAIR_FACE_YAW = { n: 0, s: Math.PI, w: Math.PI / 2, e: -Math.PI / 2 };
+
+
+function floorsForLevel(level, baseSeed) {
+  if (level <= 2) return 2; 
+  return 2 + (hashSeed(`${baseSeed}_${level}_floors`) % 3); 
+}
+function exitCountForLevel(level, baseSeed) {
+  const roll = createRng(hashSeed(`${baseSeed}_${level}_exitcount`))();
+  return roll > 0.97 ? 5 : roll > 0.9 ? 4 : roll > 0.75 ? 3 : roll > 0.5 ? 2 : 1;
+}
+function assignPortalFloors(level, baseSeed, floorCount, exitCount) {
+  const rng = createRng(hashSeed(`${baseSeed}_${level}_portalfloors`));
+  const floors = [];
+  for (let i = 0; i < exitCount; i++) {
+    floors.push(floorCount === 1 ? 0 : rng() < 0.3 ? 0 : 1 + Math.floor(rng() * (floorCount - 1)));
+  }
+  if (floorCount > 1 && !floors.some((f) => f > 0)) floors[floors.length - 1] = floorCount - 1;
+  return floors;
+}
+function pickExitCellsOn(grid, w, h, count, rng) {
+  const out = [];
+  const seen = new Set();
+  for (let attempt = 0; attempt < 10 && out.length < count; attempt++) {
+    for (const c of pickExits(grid, w, h, 0, 0, rng)) {
+      const k = `${c.x},${c.y}`;
+      if (!seen.has(k) && out.length < count) {
+        seen.add(k);
+        out.push(c);
+      }
+    }
+  }
+  return out;
+}
+
+function pickStairCells(grid, w, h, { needUp, needDown, avoid, rng }) {
+  const DL = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+  const special = (c) =>
+    c.doorN || c.doorS || c.doorE || c.doorW || c.hatchN || c.hatchS || c.hatchE || c.hatchW ||
+    c.crawlN || c.crawlS || c.crawlE || c.crawlW;
+  const leaves = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (avoid.has(`${x},${y}`)) continue;
+      const c = grid[y][x];
+      if (c.roomId != null || c.rampDir || special(c)) continue;
+      const open = ['n', 's', 'e', 'w'].filter((d) => !c[d]);
+      if (open.length !== 1) continue;
+      const nx = x + DL[open[0]][0];
+      const ny = y + DL[open[0]][1];
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h || grid[ny][nx].rampDir) continue;
+      const fx = x - DL[open[0]][0];
+      const fy = y - DL[open[0]][1];
+      let vista = false;
+      if (fx >= 0 && fy >= 0 && fx < w && fy < h && !avoid.has(`${fx},${fy}`)) {
+        const fc = grid[fy][fx];
+        vista =
+          !fc.rampDir && fc.roomId == null && !fc.hurdleDir && !special(fc) &&
+          Math.abs((fc.elevation || 0) - (c.elevation || 0)) <= 2;
+      }
+      leaves.push({ x, y, dir: open[0], fx, fy, vista });
+    }
+  }
+  if (!leaves.length) return null;
+  const key = (l) => `${l.x},${l.y}`;
+  const fkey = (l) => `${l.fx},${l.fy}`;
+  const clash = (a, b) => key(a) === key(b) || fkey(a) === fkey(b) || fkey(a) === key(b) || fkey(b) === key(a);
+  const strict = leaves.filter((l) => l.vista);
+  const source = strict.length >= (needUp ? 1 : 0) + (needDown ? 1 : 0) ? strict : leaves;
+  let down = null;
+  let up = null;
+  if (needDown) down = source[Math.floor(rng() * source.length)];
+  if (needUp) {
+    let pool = source.filter((l) => l !== down && (!down || !clash(l, down)));
+    if (!pool.length) pool = leaves.filter((l) => l !== down);
+    const list = pool.length ? pool : leaves;
+    const from = down || { x: 0, y: 0 };
+    const dist = bfsDistances(grid, w, h, from.x, from.y);
+    const far = list.filter((l) => dist[l.y][l.x] >= 0).sort((a, b) => dist[b.y][b.x] - dist[a.y][a.x]);
+    const top = far.slice(0, Math.max(1, Math.ceil(far.length * 0.4)));
+    up = (top.length ? top : list)[Math.floor(rng() * (top.length || list.length))];
+  }
+  
+  const upVista = up && !(down && clash(up, down)) ? up.vista : false;
+  return {
+    up: up && { ...up, vista: upVista, kind: 'up' },
+    down: down && { ...down, kind: 'down' },
+  };
 }
 
 export class MazeGame {
@@ -5139,6 +5196,15 @@ export class MazeGame {
     }
     this.furnitureMeshes = [];
     this._furnitureColliders = new Map();
+    if (this._stairMeshes) {
+      for (const g of this._stairMeshes) {
+        this.scene.remove(g);
+        g.traverse((o) => {
+          if (o.geometry) o.geometry.dispose();
+        });
+      }
+    }
+    this._stairMeshes = [];
   }
   _maybeAddStain(wallMesh, axis) {
     const rng = this.rng || Math.random;
@@ -5249,13 +5315,20 @@ export class MazeGame {
       water: [],
     };
     const rampCells = [];
+    const lids = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
+        if (this._downStairKeys && this._downStairKeys.has(`${x},${y}`)) continue; 
         const cell = this.maze[y][x];
         const surface = (this.surfaceMap[y] && this.surfaceMap[y][x]) || 'stone';
         const type = this.regions && this.regionMap
           ? this.regions.floorKey(this.regions.visual(x, y, 'floor'), surface, cell.roomId != null)
           : surface;
+        if (this._lidKeys && this._lidKeys.has(`${x},${y}`) && !cell.rampDir) {
+          
+          lids.push({ x, y, type, topY: (cell.elevation || 0) * STEP_HEIGHT });
+          continue;
+        }
         if (cell.rampDir) {
           rampCells.push({
             x,
@@ -5285,6 +5358,13 @@ export class MazeGame {
       this.scene.add(mesh);
       this.floorMeshes.push(mesh);
     });
+    for (const { x, y, type, topY } of lids) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(CELL, STAIR_LID_T, CELL), this._floorMat(type));
+      mesh.position.set(originX + x * CELL + CELL / 2, topY - STAIR_LID_T / 2, originZ + y * CELL + CELL / 2);
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      this.floorMeshes.push(mesh);
+    }
     for (const { x, y, type, cell } of rampCells) {
       const cx = originX + x * CELL + CELL / 2;
       const cz = originZ + y * CELL + CELL / 2;
@@ -5428,7 +5508,9 @@ export class MazeGame {
         if (collideRadius) {
           const key = `${item.x},${item.y}`;
           if (!this._furnitureColliders.has(key)) this._furnitureColliders.set(key, []);
-          this._furnitureColliders.get(key).push({ x: cx, z: cz, radius: collideRadius });
+          this._furnitureColliders.get(key).push({
+            x: cx, z: cz, radius: collideRadius, yaw: item.yaw || 0, ...(FURNITURE_SUPPORT[item.kind] || {}),
+          });
         }
       }
     }
@@ -5755,7 +5837,11 @@ export class MazeGame {
         if (e > maxElev) maxElev = e;
       }
     }
-    const wallBottom = minElev * STEP_HEIGHT - 0.1;
+    let wallBottom = minElev * STEP_HEIGHT - 0.1;
+    
+    for (const st of this._stairs || []) {
+      if (st.kind === 'down') wallBottom = Math.min(wallBottom, st.baseY - st.rise - 0.7);
+    }
     const wallTop = maxElev * STEP_HEIGHT + WALL_H;
     const wallSpan = wallTop - wallBottom;
     const wallCenterY = (wallBottom + wallTop) / 2;
@@ -5887,17 +5973,176 @@ export class MazeGame {
     this._buildFloor(w, h);
     this._wallCtxRegion = null;
     this._wallCtxCell = null;
+    this.regions.setCeilingHoles([]); 
     this.ceilMesh = this.regions.buildCeiling(grid, w, h, originX, originZ, wallTop);
     this.scene.add(this.ceilMesh);
     {
       const avoidLights = new Set();
       if (this.exits) for (const ex of this.exits) avoidLights.add(`${ex.x},${ex.y}`);
+      for (const st of this._stairs || []) {
+        avoidLights.add(`${st.x},${st.y}`);
+        if (st.vista) avoidLights.add(`${st.fx},${st.fy}`);
+      }
       this.regions.buildLights(grid, w, h, originX, originZ, wallTop, avoidLights);
     }
     return {
       x: originX,
       z: originZ,
     };
+  }
+  _stairWorldPos(st, a, lateral = 0) {
+    const c = this._cellCenter(st.x, st.y);
+    const half = CELL / 2;
+    switch (st.dir) {
+      case 'n': return { x: c.x + lateral, z: c.z - half + a };
+      case 's': return { x: c.x + lateral, z: c.z + half - a };
+      case 'w': return { x: c.x - half + a, z: c.z + lateral };
+      default: return { x: c.x + half - a, z: c.z + lateral };
+    }
+  }
+  _stairAlong(st, px, pz) {
+    const c = this._cellCenter(st.x, st.y);
+    const half = CELL / 2;
+    switch (st.dir) {
+      case 'n': return pz - (c.z - half);
+      case 's': return c.z + half - pz;
+      case 'w': return px - (c.x - half);
+      default: return c.x + half - px;
+    }
+  }
+  _stairHeight(st, px, pz) {
+    const t = Math.max(0, Math.min(1, (this._stairAlong(st, px, pz) - STAIR_A0) / (STAIR_A1 - STAIR_A0)));
+    return st.kind === 'up' ? st.baseY + st.rise * t : st.baseY - st.rise * t;
+  }
+  _computeWallTop(grid, w, h) {
+    let maxElev = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) maxElev = Math.max(maxElev, grid[y][x].elevation || 0);
+    }
+    return maxElev * STEP_HEIGHT + WALL_H;
+  }
+  _buildStairMeshes() {
+    this._stairMeshes = [];
+    const wallMat = (this._wallPalette && this._wallPalette.normal) || this._wallMat;
+    const LAT = CELL / 2 - 0.125 - 0.005; 
+    for (const st of this._stairs || []) {
+      const group = new THREE.Group();
+      const region = this.regionMap ? this.regionMap[st.y][st.x] : 'house';
+      const mat = this._floorMat(this.regions.floorKey(region, 'stone', false));
+      const up = st.kind === 'up';
+      const alongZ = st.dir === 'n' || st.dir === 's';
+      const W = CELL - 0.24;
+      const steps = st.steps;
+      const run = (STAIR_A1 - STAIR_A0) / steps;
+      const floorY = st.baseY;
+      const rise = st.rise;
+      const solidBot = floorY - 0.08;
+      const shaftBottom = floorY - rise - 0.68;
+
+      
+      const box = (a0, a1, l0, l1, y0, y1, material, parent = group) => {
+        const hgt = y1 - y0;
+        if (hgt < 0.001) return null;
+        const p = this._stairWorldPos(st, (a0 + a1) / 2, (l0 + l1) / 2);
+        const depth = a1 - a0;
+        const wid = l1 - l0;
+        const m = new THREE.Mesh(new THREE.BoxGeometry(alongZ ? wid : depth, hgt, alongZ ? depth : wid), material);
+        m.position.set(p.x, y0 + hgt / 2, p.z);
+        m.receiveShadow = true;
+        parent.add(m);
+        return m;
+      };
+      const box1 = (a0, a1, topY, botY) => box(a0, a1, -W / 2, W / 2, botY, topY, mat);
+      if (!up) box1(0, STAIR_A0, floorY, shaftBottom);
+      for (let k = 0; k < steps; k++) {
+        const t = (k + 0.5) / steps;
+        const a0 = STAIR_A0 + k * run;
+        if (up) box1(a0, a0 + run, floorY + rise * t, solidBot);
+        else box1(a0, a0 + run, floorY - rise * t, shaftBottom);
+      }
+      if (up) box1(STAIR_A1, CELL, floorY + rise, solidBot);
+      else box1(STAIR_A1, CELL, floorY - rise, shaftBottom);
+      st.vistaGroup = null;
+      st.vistaOn = false;
+      st.farWallMesh = null;
+      if (st.vista) {
+        const far = this._stairWorldPos(st, CELL);
+        const wantGeo = alongZ ? this._wallGeo : this._wallGeoV;
+        st.farWallMesh =
+          this.wallMeshes.find(
+            (m) => m.geometry === wantGeo && Math.abs(m.position.x - far.x) < 0.06 && Math.abs(m.position.z - far.z) < 0.06,
+          ) || null;
+        if (!st.farWallMesh) st.vista = false;
+      }
+      let lightPos = this._cellCenter(st.x, st.y);
+      let lightY = up ? floorY + rise + 1.2 : floorY + 1.2;
+      if (st.vista && up) {
+        const vg = new THREE.Group();
+        const L = floorY + rise;
+        const top = this._wallTop;
+        box(CELL, 2 * CELL, -(CELL / 2 - 0.125), CELL / 2 - 0.125, L - STAIR_LID_T, L, mat, vg);
+        box(CELL, 2 * CELL, -LAT - 0.1, -LAT, L - STAIR_LID_T, top, wallMat, vg);
+        box(CELL, 2 * CELL, LAT, LAT + 0.1, L - STAIR_LID_T, top, wallMat, vg);
+        box(2 * CELL - 0.125 - 0.105, 2 * CELL - 0.125 - 0.005, -LAT, LAT, L - STAIR_LID_T, top, wallMat, vg);
+        vg.visible = false;
+        group.add(vg);
+        st.vistaGroup = vg;
+        lightPos = this._stairWorldPos(st, 3.1);
+        lightY = L + 1.25;
+      } else if (st.vista && !up) {
+        const stubFloor = floorY - rise;
+        const lidBottom = st.lidTop - STAIR_LID_T;
+        box(CELL, 2 * CELL, -(CELL / 2 - 0.125), CELL / 2 - 0.125, stubFloor - STAIR_LID_T, stubFloor, mat);
+        box(CELL, 2 * CELL, -LAT - 0.1, -LAT, stubFloor, lidBottom, wallMat);
+        box(CELL, 2 * CELL, LAT, LAT + 0.1, stubFloor, lidBottom, wallMat);
+        box(2 * CELL - 0.125 - 0.105, 2 * CELL - 0.125 - 0.005, -LAT, LAT, stubFloor, lidBottom, wallMat);
+        st.farWallMesh.visible = false;
+        box(CELL - 0.125, CELL + 0.125, -CELL / 2, CELL / 2, lidBottom, this._wallTop, st.farWallMesh.material);
+        const p = this._stairWorldPos(st, 5.6);
+        const glow = new THREE.PointLight(0xffd8a0, 6, 8, 2);
+        glow.position.set(p.x, stubFloor + 1.7, p.z);
+        group.add(glow);
+      }
+
+      
+      const light = new THREE.PointLight(up ? 0xfff2d0 : 0x6a86c8, up ? 14 : 7, 9, 2);
+      light.position.set(lightPos.x, lightY, lightPos.z);
+      group.add(light);
+      this.scene.add(group);
+      this._stairMeshes.push(group);
+    }
+  }
+  _updateStairVistas() {
+    if (!this._stairs || !this._stairs.length || !this.maze) return;
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
+    for (const st of this._stairs) {
+      if (!st.vistaGroup) continue;
+      const inside = st.x === cx && st.y === cy;
+      if (st.vistaOn === inside) continue;
+      st.vistaOn = inside;
+      st.vistaGroup.visible = inside;
+      if (st.farWallMesh) st.farWallMesh.visible = !inside;
+    }
+  }
+  _updateStairs(dt) {
+    this._updateStairVistas();
+    const tr = this._floorTransition;
+    if (tr) {
+      tr.frames += 1;
+      if (tr.frames >= STAIR_SWAP_FRAMES) {
+        const kind = tr.stair.kind;
+        this._floorTransition = null;
+        const to = kind === 'up' ? this.floor + 1 : this.floor - 1;
+        this.loadLevel(this.level, null, { floor: to, arrive: kind === 'up' ? 'down' : 'up' });
+      }
+      return;
+    }
+    if (!this._stairs || !this._stairs.length) return;
+    const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
+    const st = this._stairByCell.get(`${cx},${cy}`);
+    if (!st) return;
+    const progress = (this._stairAlong(st, this.player.x, this.player.z) - STAIR_A0) / (STAIR_A1 - STAIR_A0);
+    if (progress >= STAIR_TRIGGER) this._floorTransition = { stair: st, frames: 0 };
   }
   _edgeKey(x, y, dir) {
     return `${x},${y},${dir}`;
@@ -5971,6 +6216,8 @@ export class MazeGame {
     if (!this.maze) return 0;
     const { cx, cy } = this._cellCoordsFor(px, pz);
     const cell = this.maze[cy][cx];
+    const stair = this._stairByCell && this._stairByCell.get(`${cx},${cy}`);
+    if (stair) return this._stairHeight(stair, px, pz);
     const ownElev = cell.elevation || 0;
     let floor;
     if (!cell.rampDir) {
@@ -6147,24 +6394,37 @@ export class MazeGame {
       seed !== undefined && seed !== null && seed !== '' ? String(seed) : String(this.baseSeed);
     return this.seedString;
   }
-  loadLevel(n, entryLetter) {
+  loadLevel(n, entryLetter, opts = {}) {
+    const floor = opts.floor || 0;
+    this.floor = floor;
+    this.floorCount = floorsForLevel(n, this.baseSeed);
+    const seedTag = floor ? `${this.baseSeed}_f${floor}` : `${this.baseSeed}`;
     this.level = n;
     this.floorLabel = entryLetter ? `${n}${entryLetter.toUpperCase()}` : String(n);
     const { w, h } = sizeForLevel(n);
     this.mazeW = w;
     this.mazeH = h;
-    this.rng = createRng(levelSeed(this.baseSeed, n));
+    this.rng = floor ? createRng(hashSeed(`${this.baseSeed}_${n}_floor${floor}`)) : createRng(levelSeed(this.baseSeed, n));
     const density = roomDensityForLevel(n);
     this.maze = generateMaze(w, h, this.rng);
     assignElevations(this.maze, w, h, 0, 0, this.rng);
     assignObstacles(this.maze, w, h, 0, 0, this.rng);
     assignDoors(this.maze, w, h, this.rng, { density });
     this.surfaceMap = generateSurfaceMap(w, h, this.rng);
-    this.regionMap = this.regions.generate(w, h, this.baseSeed, n);
-    const exitCells = pickExits(this.maze, w, h, 0, 0, this.rng);
+    this.regionMap = this.regions.generate(w, h, seedTag, n);
+    let exitCells;
+    let portalLetters = null;
+    this._portalFloors = null;
+    if (this.floorCount === 1) {
+      exitCells = pickExits(this.maze, w, h, 0, 0, this.rng);
+    } else {
+      this._portalFloors = assignPortalFloors(n, this.baseSeed, this.floorCount, exitCountForLevel(n, this.baseSeed));
+      portalLetters = this._portalFloors.map((f, i) => (f === floor ? i : -1)).filter((i) => i >= 0);
+      exitCells = pickExitCellsOn(this.maze, w, h, portalLetters.length, createRng(hashSeed(`${seedTag}_exits`)));
+    }
     this.exits = exitCells.map((e, i) => ({
       ...e,
-      letter: EXIT_LETTERS[i] || String(i + 1),
+      letter: portalLetters ? EXIT_LETTERS[portalLetters[i]] : EXIT_LETTERS[i] || String(i + 1),
     }));
     
     
@@ -6180,13 +6440,46 @@ export class MazeGame {
     
     
     clearHurdlesNearAllDoors(this.maze, w, h);
+    this._stairs = [];
+    this._stairByCell = new Map();
+    this._downStairKeys = new Set();
+    this._lidKeys = new Set();
+    if (this.floorCount > 1) {
+      const picked = pickStairCells(this.maze, w, h, {
+        needUp: floor < this.floorCount - 1,
+        needDown: floor > 0,
+        avoid: new Set(['0,0', ...this.exits.map((e) => `${e.x},${e.y}`)]),
+        rng: createRng(hashSeed(`${seedTag}_stairs`)),
+      });
+      if (picked) {
+        const wallTop = this._computeWallTop(this.maze, w, h);
+        for (const st of [picked.down, picked.up]) {
+          if (!st) continue;
+          const stair = { ...st, baseY: (this.maze[st.y][st.x].elevation || 0) * STEP_HEIGHT };
+          if (stair.kind === 'up') {
+            stair.rise = Math.max(STAIR_UP_MIN_RISE, Math.min(STAIR_UP_MAX_RISE, wallTop - stair.baseY - STAIR_UP_HEADROOM));
+          } else if (stair.vista) {
+            stair.lidTop = (this.maze[stair.fy][stair.fx].elevation || 0) * STEP_HEIGHT;
+            stair.rise = Math.max(STAIR_DOWN_MIN_RISE, stair.baseY - stair.lidTop + STAIR_LID_T + STAIR_STUB_H);
+          } else {
+            stair.rise = STAIR_RISE_DEFAULT;
+          }
+          stair.steps = Math.max(8, Math.round(stair.rise / STAIR_STEP_RISE));
+          this._stairs.push(stair);
+          this._stairByCell.set(`${st.x},${st.y}`, stair);
+          if (stair.kind === 'down') this._downStairKeys.add(`${st.x},${st.y}`);
+          if (stair.kind === 'down' && stair.vista) this._lidKeys.add(`${stair.fx},${stair.fy}`);
+        }
+        clearHurdlesNearExits(this.maze, w, h, this._stairs);
+      }
+    }
     {
       
       const pockets = carveCavePockets(
         this.maze, w, h,
         createRng(hashSeed(`${this.baseSeed}_${n}_pockets`)),
         {
-          forbidden: new Set(['0,0', ...this.exits.map((e) => `${e.x},${e.y}`)]),
+          forbidden: new Set(['0,0', ...this.exits.map((e) => `${e.x},${e.y}`), ...this._stairs.map((st) => `${st.x},${st.y}`), ...this._stairs.filter((st) => st.vista).map((st) => `${st.fx},${st.fy}`)]),
           count: w * h >= 200 ? 2 : 1,
           minSize: 5,
           maxSize: Math.max(8, Math.min(28, Math.round(w * h * 0.12))),
@@ -6201,9 +6494,10 @@ export class MazeGame {
         if (this.maze[ry][rx].roomId != null) this._roomCells.push([rx, ry]);
       }
     }
-    this.discoveredExits = new Set();
+    if (!opts.arrive) this.discoveredExits = new Set();
     const origin = this._buildMazeMeshes(this.maze, w, h);
     this.mazeOrigin = origin;
+    this._buildStairMeshes();
     this._buildRoomFurniture(this.rooms);
     this._buildDoors(this.exits);
     for (const exit of this.exits) {
@@ -6218,7 +6512,10 @@ export class MazeGame {
       if (idx >= 0) {
         const entranceRng = createRng(hashSeed(`${this.baseSeed}_${n}_entrances`));
         const anchors = pickAnchors(this.maze, w, h, this.exits, entranceRng, ANCHOR_POOL_SIZE);
-        const anchor = anchors[idx];
+        const stairKeys = new Set(this._stairs.flatMap((st) => (st.vista ? [`${st.x},${st.y}`, `${st.fx},${st.fy}`] : [`${st.x},${st.y}`])));
+        const anchor = anchors[idx] && stairKeys.has(`${anchors[idx].x},${anchors[idx].y}`)
+          ? anchors.find((a) => !stairKeys.has(`${a.x},${a.y}`))
+          : anchors[idx];
         if (anchor) {
           spawnX = anchor.x;
           spawnY = anchor.y;
@@ -6227,19 +6524,40 @@ export class MazeGame {
       entranceWallDir = this._pickEntranceWallDir(spawnX, spawnY);
       if (entranceWallDir) this._buildEntranceDoor(spawnX, spawnY, entranceWallDir);
     }
+    const arrivalStair = opts.arrive ? this._stairs.find((st) => st.kind === opts.arrive) : null;
+    if (arrivalStair) {
+      spawnX = arrivalStair.x;
+      spawnY = arrivalStair.y;
+    }
     this._spawnCell = [spawnX, spawnY];
+    this._progressTargets = null;
+    if (this.floorCount > 1 && !this.exits.length && this._portalFloors) {
+      let best = null;
+      for (const pf of this._portalFloors) {
+        if (best === null || Math.abs(pf - floor) < Math.abs(best - floor)) best = pf;
+      }
+      const target = this._stairs.find((st) => st.kind === (best > floor ? 'up' : 'down'));
+      if (target) {
+        const distGrid = bfsDistances(this.maze, w, h, target.x, target.y);
+        this._progressTargets = [{ x: target.x, y: target.y, distGrid, totalDist: Math.max(1, distGrid[spawnY][spawnX]) }];
+      }
+    }
     {
       const avoid = new Set([`${spawnX},${spawnY}`, '0,0']);
       for (const ex of this.exits) avoid.add(`${ex.x},${ex.y}`);
+      for (const st of this._stairs) {
+        avoid.add(`${st.x},${st.y}`);
+        if (st.vista) avoid.add(`${st.fx},${st.fy}`);
+      }
       this.regions.buildDecor({
         grid: this.maze, w, h,
         originX: this.mazeOrigin.x, originZ: this.mazeOrigin.z,
         wallTop: this._wallTop,
         avoid,
-        addCollider: (cx, cy, x, z, radius) => {
+        addCollider: (cx, cy, x, z, radius, extra) => {
           const key = `${cx},${cy}`;
           if (!this._furnitureColliders.has(key)) this._furnitureColliders.set(key, []);
-          this._furnitureColliders.get(key).push({ x, z, radius });
+          this._furnitureColliders.get(key).push({ x, z, radius, ...(extra || {}) });
         },
       });
     }
@@ -6255,10 +6573,17 @@ export class MazeGame {
     this.crouchToggled = false;
     this.player.y = this._floorHeightAt(start.x, start.z) + EYE_HEIGHT;
     this.yaw = entranceWallDir ? ENTRANCE_YAW_FOR_WALL[entranceWallDir] : Math.PI;
+    if (arrivalStair) {
+      const p = this._stairWorldPos(arrivalStair, 0.5);
+      this.player.x = p.x;
+      this.player.z = p.z;
+      this.yaw = STAIR_FACE_YAW[arrivalStair.dir];
+    }
     this.pitch = 0;
+    this._updateStairVistas();
     this.torchYaw = this.yaw;
     this.torchPitch = this.pitch;
-    this.batteryLevel = 1.0;
+    if (!opts.arrive) this.batteryLevel = 1.0;
     this.displayProgress = 0;
     this._strideDist = 0;
     this.currentPlayerSpeed = 0;
@@ -6270,6 +6595,7 @@ export class MazeGame {
         entryLetter: entryLetter || null,
       });
     }
+    if (this.callbacks.onFloorChange) this.callbacks.onFloorChange(this.floor + 1, this.floorCount);
   }
   _ensureSfxContext() {
     if (this.sfxCtx) return;
@@ -6492,7 +6818,7 @@ export class MazeGame {
     const { cx, cy } = this._cellCoordsFor(this.player.x, this.player.z);
     let best = 0;
     let reachable = false;
-    for (const exit of this.exits) {
+    for (const exit of this._progressTargets || this.exits) {
       const dist = exit.distGrid[cy][cx];
       if (dist < 0) continue; 
       reachable = true;
@@ -6619,8 +6945,19 @@ export class MazeGame {
     if (this._furnitureColliders) {
       const furn = this._furnitureColliders.get(`${cx},${cy}`);
       if (furn) {
+        
+        
+        const ox = this.player.x;
+        const oz = this.player.z;
+        const cellFloor = (cell.elevation || 0) * STEP_HEIGHT;
+        const feetAbs = this._floorHeightAt(ox, oz) + this.verticalOffset;
         for (const f of furn) {
-          if (Math.hypot(nx - f.x, nz - f.z) < f.radius + r) return false;
+          const R = f.radius + r;
+          const d = Math.hypot(nx - f.x, nz - f.z);
+          if (d >= R) continue;
+          const top = f.hgt === undefined ? Infinity : cellFloor + f.hgt;
+          if (feetAbs >= top - 0.02) continue;
+          if (d < Math.hypot(ox - f.x, oz - f.z)) return false;
         }
       }
     }
@@ -6691,16 +7028,47 @@ export class MazeGame {
     this.verticalVelocity = JUMP_SPEED * (this.crouching ? CROUCH_JUMP_MULT : 1);
     this.grounded = false;
   }
+  _furnitureTopAt(px, pz, feetAbs, prevFeetAbs) {
+    if (!this._furnitureColliders || !this.maze) return null;
+    const { cx, cy } = this._cellCoordsFor(px, pz);
+    const furn = this._furnitureColliders.get(`${cx},${cy}`);
+    if (!furn) return null;
+    const cellFloor = (this.maze[cy][cx].elevation || 0) * STEP_HEIGHT;
+    let best = null;
+    for (const f of furn) {
+      if (f.hgt === undefined || f.hgt > MAX_STAND_HEIGHT) continue;
+      const top = cellFloor + f.hgt;
+      
+      if (Math.max(feetAbs, prevFeetAbs) < top - 0.03) continue;
+      let inside;
+      if (f.hx !== undefined) {
+        const dx = px - f.x;
+        const dz = pz - f.z;
+        const c = Math.cos(f.yaw || 0);
+        const s = Math.sin(f.yaw || 0);
+        inside = Math.abs(dx * c - dz * s) <= f.hx + 0.05 && Math.abs(dx * s + dz * c) <= f.hz + 0.05;
+      } else {
+        inside = Math.hypot(px - f.x, pz - f.z) <= f.radius * 0.9;
+      }
+      if (inside && (best === null || top > best)) best = top;
+    }
+    return best;
+  }
   _updateJump(dt) {
     const baseFloor = this._floorHeightAt(this.player.x, this.player.z);
     const hurdleTop = this._hurdleTopSupportAt(this.player.x, this.player.z);
-    const groundOffset = hurdleTop !== null && hurdleTop > baseFloor ? hurdleTop - baseFloor : 0;
+    const feetNow = baseFloor + this.verticalOffset;
+    const furnTop = this._furnitureTopAt(this.player.x, this.player.z, feetNow, this._prevFeetAbs ?? feetNow);
+    let groundAbs = baseFloor;
+    if (hurdleTop !== null && hurdleTop > groundAbs) groundAbs = hurdleTop;
+    if (furnTop !== null && furnTop > groundAbs) groundAbs = furnTop;
+    const groundOffset = groundAbs - baseFloor;
     if (this.grounded) {
       if (this.verticalOffset > groundOffset + 0.001) {
-        
-        this.grounded = false;
+        this.grounded = false; 
       } else {
         this.verticalOffset = groundOffset;
+        this._prevFeetAbs = baseFloor + groundOffset;
         return;
       }
     }
@@ -6711,8 +7079,8 @@ export class MazeGame {
       this.verticalVelocity = 0;
       this.grounded = true;
     }
+    this._prevFeetAbs = baseFloor + this.verticalOffset;
   }
-  /** true inside the claustrophobic caves (and right at their entrance holes) */
   _forcedCrouch() {
     const R = this.regions;
     if (!R || !R.hasPockets() || !this.maze) return false;
@@ -7079,6 +7447,12 @@ export class MazeGame {
     if (this._spawnCell) cells.push(this._spawnCell);
     if (this._roomCells) cells.push(...this._roomCells);
     if (this.regions) cells.push(...this.regions.protectedCells());
+    if (this._stairs) {
+      for (const st of this._stairs) {
+        cells.push([st.x, st.y]);
+        if (st.vista) cells.push([st.fx, st.fy]);
+      }
+    }
     return cells;
   }
   _triggerMazeShift() {
@@ -7321,9 +7695,13 @@ export class MazeGame {
     this._raf = requestAnimationFrame(this._animate);
     const dt = Math.min(this.clock.getDelta(), 0.05);
     if (this.running) {
-      this._updateStance(dt);
-      this._updateJump(dt);
-      this._updateMovement(dt);
+      if (!this._floorTransition) {
+        this._updateStance(dt);
+        this._updateJump(dt);
+        this._updateMovement(dt);
+      } else {
+        this.currentPlayerSpeed = 0;
+      }
       this._updateCurrentSurface();
       this._updateFootsteps(dt);
       this._updateBattery(dt);
@@ -7333,6 +7711,7 @@ export class MazeGame {
       this._updateInteractPrompt();
       this._updateShortcutDoors(dt);
       this._updateMazeShift(dt);
+      this._updateStairs(dt);
       this.elapsed += dt;
       if (this.callbacks.onTime) this.callbacks.onTime(this.elapsed);
       const rawProgress = this._computeProgress();

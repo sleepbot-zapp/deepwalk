@@ -1,0 +1,36 @@
+{
+  "SURFACE_TYPES": [
+    "stone",
+    "grass",
+    "mud",
+    "water"
+  ],
+  "STAIN_TYPES": [
+    "blood",
+    "mud",
+    "damp"
+  ],
+  "STAIN_CHANCE": 0.45,
+  "WALL_STYLE_WEIGHTS": [
+    {
+      "style": "normal",
+      "weight": 0.52
+    },
+    {
+      "style": "eerie1",
+      "weight": 0.13
+    },
+    {
+      "style": "eerie2",
+      "weight": 0.13
+    },
+    {
+      "style": "cracked",
+      "weight": 0.13
+    },
+    {
+      "style": "stained",
+      "weight": 0.09
+    }
+  ]
+}

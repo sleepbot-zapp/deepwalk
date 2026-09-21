@@ -649,3 +649,18 @@ button:hover {
     height: 72px;
   }
 }
+
+.floor-tag {
+  color: rgba(232, 228, 218, 0.6);
+}
+
+.floor-fade {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition-property: opacity;
+  transition-timing-function: ease-in-out;
+}

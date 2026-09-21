@@ -1,0 +1,23 @@
+{
+  "VIEWMODEL_POS": {
+    "x": 0.34,
+    "y": -0.4,
+    "z": -0.55
+  },
+  "VIEWMODEL_ROT": {
+    "x": -0.08,
+    "y": -0.42,
+    "z": 0.16
+  },
+  "FLASHLIGHT_TARGET_SIZE": 0.55,
+  "FLASHLIGHT_ROTATION": {
+    "x": "PI",
+    "y": 0,
+    "z": 0
+  },
+  "FLASHLIGHT_OFFSET": {
+    "x": 0,
+    "y": 0.06,
+    "z": -0.05
+  }
+}

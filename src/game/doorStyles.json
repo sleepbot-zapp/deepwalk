@@ -1,0 +1,54 @@
+{
+  "DOOR_STYLES": [
+    {
+      "key": "darkOak",
+      "base": "#2c2016",
+      "grain": [40, 26, 14],
+      "handle": "0x2b2b2e"
+    },
+    {
+      "key": "ashGrey",
+      "base": "#3a3934",
+      "grain": [48, 48, 44],
+      "handle": "0x55524a"
+    },
+    {
+      "key": "crimsonFaded",
+      "base": "#40232a",
+      "grain": [46, 22, 24],
+      "ornate": true,
+      "handle": "0x6b5a3a"
+    },
+    {
+      "key": "spruceDusty",
+      "base": "#31352a",
+      "grain": [38, 40, 30],
+      "pane": "diamond",
+      "paneColor": "rgba(140,150,132,0.22)",
+      "handle": "0x3a3a3e"
+    },
+    {
+      "key": "birchPale",
+      "base": "#5e5140",
+      "grain": [72, 63, 50],
+      "pane": "small",
+      "paneColor": "rgba(175,182,178,0.26)",
+      "handle": "0xa89d7c"
+    },
+    {
+      "key": "charred",
+      "base": "#181410",
+      "grain": [28, 22, 16],
+      "handle": "0x1c1c1e"
+    },
+    {
+      "key": "ironGrey",
+      "base": "#3a3b3e",
+      "grain": [50, 52, 56],
+      "pane": "cross",
+      "paneColor": "rgba(100,110,120,0.22)",
+      "handle": "0x8a8f96",
+      "metal": true
+    }
+  ]
+}
